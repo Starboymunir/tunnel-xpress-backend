@@ -1,0 +1,32 @@
+databases:
+  - name: tunnel-express-db
+    plan: free
+    databaseName: tunnel_express
+    user: tunnel_express_user
+
+services:
+  - type: web
+    plan: free
+    name: tunnel-express-api
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npx prisma db push --accept-data-loss && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tunnel-express-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: "15m"
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: "7d"
+      - key: OTP_EXPIRY_MINUTES
+        value: "10"
+      - key: FRONTEND_URL
+        value: "*"

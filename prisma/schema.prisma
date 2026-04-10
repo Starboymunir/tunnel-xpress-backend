@@ -1,0 +1,441 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ──────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  RIDER
+  ADMIN
+}
+
+enum AuthProvider {
+  EMAIL
+  PHONE
+  GOOGLE
+}
+
+enum DeliveryStatus {
+  DRAFT
+  PENDING_PAYMENT
+  PAID
+  FINDING_RIDER
+  RIDER_ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+  FAILED
+}
+
+enum RiderType {
+  BIKE
+  CAR
+  VAN
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CARD
+  BANK_TRANSFER
+  OPAY
+  WALLET
+}
+
+enum NotificationType {
+  ORDER
+  PROMO
+  SYSTEM
+  PAYMENT
+  RIDER
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum RiderAvailability {
+  ONLINE
+  OFFLINE
+  BUSY
+}
+
+// ─── USER ───────────────────────────────────────────────
+
+model User {
+  id            String       @id @default(uuid())
+  email         String?      @unique
+  phone         String?      @unique
+  passwordHash  String?
+  firstName     String?
+  lastName      String?
+  avatarUrl     String?
+  role          Role         @default(CUSTOMER)
+  authProvider  AuthProvider  @default(EMAIL)
+  isEmailVerified Boolean    @default(false)
+  isPhoneVerified Boolean    @default(false)
+  isActive      Boolean      @default(true)
+  referralCode  String       @unique @default(uuid())
+  referredBy    String?
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Relations
+  settings       UserSettings?
+  deliveries     Delivery[]     @relation("CustomerDeliveries")
+  payments       Payment[]
+  notifications  Notification[]
+  savedLocations SavedLocation[]
+  savedCards     SavedCard[]
+  referrals      Referral[]     @relation("Referrer")
+  referredUsers  Referral[]     @relation("Referred")
+  ratings        Rating[]       @relation("RaterUser")
+  supportChats   SupportChat[]
+  riderProfile   RiderProfile?
+  wallet         Wallet?
+
+  @@map("users")
+}
+
+model UserSettings {
+  id                String  @id @default(uuid())
+  userId            String  @unique
+  pushNotifications Boolean @default(true)
+  emailNotifications Boolean @default(true)
+  smsNotifications  Boolean @default(true)
+  biometricLogin    Boolean @default(false)
+  language          String  @default("en")
+  darkMode          Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+// ─── RIDER PROFILE ──────────────────────────────────────
+
+model RiderProfile {
+  id              String            @id @default(uuid())
+  userId          String            @unique
+  vehicleType     RiderType         @default(BIKE)
+  plateNumber     String?
+  licenseNumber   String?
+  availability    RiderAvailability @default(OFFLINE)
+  currentLat      Float?
+  currentLng      Float?
+  lastLocationAt  DateTime?
+  totalDeliveries Int               @default(0)
+  avgRating       Float             @default(0)
+  isApproved      Boolean           @default(false)
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries Delivery[] @relation("RiderDeliveries")
+  ratings    Rating[]   @relation("RatedRider")
+
+  @@map("rider_profiles")
+}
+
+// ─── DELIVERY / ORDER ───────────────────────────────────
+
+model Delivery {
+  id              String         @id @default(uuid())
+  orderTag        String         @unique
+  customerId      String
+  riderId         String?
+  status          DeliveryStatus @default(DRAFT)
+
+  // Pickup
+  pickupAddress   String
+  pickupLat       Float
+  pickupLng       Float
+  pickupContactName  String?
+  pickupContactPhone String?
+  pickupNote      String?
+
+  // Dropoff
+  dropoffAddress  String
+  dropoffLat      Float
+  dropoffLng      Float
+  dropoffContactName  String?
+  dropoffContactPhone String?
+  dropoffNote     String?
+
+  // Package
+  packageName     String
+  packageDescription String?
+  packageImageUrl    String?
+  riderType       RiderType      @default(BIKE)
+  specialInstructions String?
+
+  // Pricing
+  distanceKm      Float          @default(0)
+  baseFee         Float          @default(0)
+  perKmFee        Float          @default(0)
+  surgeMultiplier Float          @default(1.0)
+  totalFee        Float          @default(0)
+  couponId        String?
+  discountAmount  Float          @default(0)
+
+  // Timestamps
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  paidAt          DateTime?
+  assignedAt      DateTime?
+  pickedUpAt      DateTime?
+  deliveredAt     DateTime?
+  cancelledAt     DateTime?
+
+  // Tracking
+  estimatedMinutes Int?
+  liveRiderLat     Float?
+  liveRiderLng     Float?
+
+  // Relations
+  customer  User          @relation("CustomerDeliveries", fields: [customerId], references: [id])
+  rider     RiderProfile? @relation("RiderDeliveries", fields: [riderId], references: [id])
+  payment   Payment?
+  rating    Rating?
+  coupon    Coupon?       @relation(fields: [couponId], references: [id])
+
+  @@index([customerId])
+  @@index([riderId])
+  @@index([status])
+  @@index([orderTag])
+  @@map("deliveries")
+}
+
+// ─── PAYMENT ────────────────────────────────────────────
+
+model Payment {
+  id              String        @id @default(uuid())
+  deliveryId      String        @unique
+  userId          String
+  amount          Float
+  currency        String        @default("NGN")
+  method          PaymentMethod @default(CARD)
+  status          PaymentStatus @default(PENDING)
+  paystackRef     String?       @unique
+  paystackAuthCode String?
+  metadata        Json?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([paystackRef])
+  @@map("payments")
+}
+
+model SavedCard {
+  id            String  @id @default(uuid())
+  userId        String
+  last4         String
+  brand         String
+  expMonth      Int
+  expYear       Int
+  authCode      String
+  isDefault     Boolean @default(false)
+  bank          String?
+
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("saved_cards")
+}
+
+model Wallet {
+  id       String @id @default(uuid())
+  userId   String @unique
+  balance  Float  @default(0)
+  currency String @default("NGN")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+model Coupon {
+  id              String   @id @default(uuid())
+  code            String   @unique
+  discountPercent Float?
+  discountFlat    Float?
+  maxUses         Int      @default(100)
+  currentUses     Int      @default(0)
+  minOrderAmount  Float    @default(0)
+  expiresAt       DateTime
+  isActive        Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+
+  deliveries Delivery[]
+
+  @@map("coupons")
+}
+
+// ─── RATING ─────────────────────────────────────────────
+
+model Rating {
+  id         String @id @default(uuid())
+  deliveryId String @unique
+  raterId    String
+  riderId    String
+  score      Int    // 1-5
+  comment    String?
+
+  createdAt  DateTime @default(now())
+
+  delivery   Delivery     @relation(fields: [deliveryId], references: [id])
+  rater      User         @relation("RaterUser", fields: [raterId], references: [id])
+  rider      RiderProfile @relation("RatedRider", fields: [riderId], references: [id])
+
+  @@map("ratings")
+}
+
+// ─── NOTIFICATIONS ──────────────────────────────────────
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType @default(SYSTEM)
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean          @default(false)
+
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ─── SAVED LOCATIONS ────────────────────────────────────
+
+model SavedLocation {
+  id        String  @id @default(uuid())
+  userId    String
+  label     String
+  address   String
+  lat       Float
+  lng       Float
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("saved_locations")
+}
+
+// ─── REFERRALS ──────────────────────────────────────────
+
+model Referral {
+  id          String   @id @default(uuid())
+  referrerId  String
+  referredId  String
+  bonusAmount Float    @default(0)
+  isPaid      Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id])
+  referred User @relation("Referred", fields: [referredId], references: [id])
+
+  @@unique([referrerId, referredId])
+  @@map("referrals")
+}
+
+// ─── SUPPORT ────────────────────────────────────────────
+
+model SupportChat {
+  id        String              @id @default(uuid())
+  userId    String
+  subject   String
+  status    SupportTicketStatus @default(OPEN)
+
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id])
+  messages SupportMessage[]
+
+  @@index([userId])
+  @@map("support_chats")
+}
+
+model SupportMessage {
+  id        String  @id @default(uuid())
+  chatId    String
+  senderId  String
+  content   String
+  isAgent   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  chat SupportChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@map("support_messages")
+}
+
+// ─── OTP ────────────────────────────────────────────────
+
+model OTP {
+  id        String   @id @default(uuid())
+  identifier String  // email or phone
+  code      String
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([identifier, code])
+  @@map("otps")
+}
+
+// ─── PROMO BANNERS ──────────────────────────────────────
+
+model PromoBanner {
+  id        String   @id @default(uuid())
+  title     String
+  subtitle  String?
+  imageUrl  String?
+  linkUrl   String?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  @@map("promo_banners")
+}

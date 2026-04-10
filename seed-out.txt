@@ -1,0 +1,18 @@
+﻿­ƒî▒ Seeding database...
+  Ô£ô Admin user: admin@tunnelexpress.ng
+  Ô£ô Customer: customer@test.com
+  Ô£ô Rider: rider@test.com
+  Ô£ô Rider 2: rider2@test.com
+  Ô£ô Promo banners created
+  Ô£ô Coupons created
+  Ô£ô Saved locations created
+  Ô£ô Notifications created
+
+Ô£à Seed completed successfully!
+
+  Test accounts:
+  ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  Admin:    admin@tunnelexpress.ng / admin123456
+  Customer: customer@test.com / customer123
+  Rider:    rider@test.com / rider123456
+  Rider 2:  rider2@test.com / rider123456
