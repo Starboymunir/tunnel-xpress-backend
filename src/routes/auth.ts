@@ -7,9 +7,11 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { generateTokenPair, verifyRefreshToken } from '../lib/tokens';
 import { createOTP, verifyOTP } from '../lib/otp';
+import { sendOtpEmail } from '../lib/email';
 import { generateReferralCode } from '../lib/generators';
 import {
   registerEmailSchema,
+  registerGoogleSchema,
   registerPhoneSchema,
   loginEmailSchema,
   loginPhoneSchema,
@@ -21,13 +23,79 @@ import {
 
 const router = Router();
 
+// ─── REGISTER OR LOGIN WITH GOOGLE ─────────────────────
+
+router.post(
+  '/register/google',
+  validate(registerGoogleSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { email, firstName, lastName, avatarUrl } = req.body;
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+
+    let user;
+    if (existing) {
+      user = await prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          firstName: firstName ?? existing.firstName,
+          lastName: lastName ?? existing.lastName,
+          avatarUrl: avatarUrl ?? existing.avatarUrl,
+          authProvider: 'GOOGLE',
+          isEmailVerified: true,
+        },
+      });
+    } else {
+      const refCode = generateReferralCode(firstName || 'user');
+      user = await prisma.user.create({
+        data: {
+          email,
+          firstName,
+          lastName,
+          avatarUrl,
+          authProvider: 'GOOGLE',
+          isEmailVerified: true,
+          referralCode: refCode,
+          settings: { create: {} },
+          wallet: { create: {} },
+        },
+      });
+    }
+
+    if (!user.isActive) throw new AppError('Account is deactivated', 403);
+
+    const tokens = generateTokenPair({ userId: user.id, role: user.role });
+
+    res.json({
+      success: true,
+      message: 'Google authentication successful',
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          phone: user.phone,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          role: user.role,
+          avatarUrl: user.avatarUrl,
+          isEmailVerified: user.isEmailVerified,
+          isPhoneVerified: user.isPhoneVerified,
+          referralCode: user.referralCode,
+        },
+        ...tokens,
+      },
+    });
+  })
+);
+
 // ─── REGISTER WITH EMAIL ────────────────────────────────
 
 router.post(
   '/register/email',
   validate(registerEmailSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { email, password, firstName, lastName, referralCode } = req.body;
+    const { email: rawEmail, password, firstName, lastName, referralCode } = req.body;
+    const email = rawEmail.trim().toLowerCase();
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) throw new AppError('Email already registered', 409);
@@ -65,8 +133,8 @@ router.post(
 
     // Send verification OTP
     const otpCode = await createOTP(email);
-    // TODO: Send email with otpCode via email service
     console.log(`[DEV] Email OTP for ${email}: ${otpCode}`);
+    await sendOtpEmail(email, otpCode);
 
     const tokens = generateTokenPair({ userId: user.id, role: user.role });
 
@@ -146,7 +214,8 @@ router.post(
   '/login/email',
   validate(loginEmailSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { email, password } = req.body;
+    const { email: rawEmail, password } = req.body;
+    const email = rawEmail.trim().toLowerCase();
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !user.passwordHash) {
@@ -261,6 +330,9 @@ router.post(
 
     const otpCode = await createOTP(identifier);
     console.log(`[DEV] Resend OTP for ${identifier}: ${otpCode}`);
+    if (identifier.includes('@')) {
+      await sendOtpEmail(identifier, otpCode);
+    }
 
     res.json({
       success: true,
@@ -275,7 +347,7 @@ router.post(
   '/forgot-password',
   validate(forgotPasswordSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { email } = req.body;
+    const email = (req.body.email as string).trim().toLowerCase();
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
@@ -288,6 +360,7 @@ router.post(
 
     const otpCode = await createOTP(email);
     console.log(`[DEV] Password reset OTP for ${email}: ${otpCode}`);
+    await sendOtpEmail(email, otpCode);
 
     res.json({
       success: true,
@@ -302,7 +375,8 @@ router.post(
   '/reset-password',
   validate(resetPasswordSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { identifier, code, newPassword } = req.body;
+    const { identifier: rawIdentifier, code, newPassword } = req.body;
+    const identifier = rawIdentifier.includes('@') ? rawIdentifier.trim().toLowerCase() : rawIdentifier.trim();
 
     const isValid = await verifyOTP(identifier, code);
     if (!isValid) throw new AppError('Invalid or expired OTP', 400);

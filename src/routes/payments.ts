@@ -7,8 +7,23 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { initPaymentSchema, verifyPaymentSchema } from '../schemas';
 import { config } from '../config';
+import { simulateDeliveryProgression } from '../lib/devSimulator';
 
 const router = Router();
+
+// Fake mode: when no Paystack secret key is configured (or the value looks
+// like a placeholder), simulate successful payments end-to-end so the rest
+// of the flow can be tested without keys.
+const PAYSTACK_KEY = (config.paystack.secretKey || '').trim();
+const FAKE_PAYMENTS =
+  !PAYSTACK_KEY ||
+  PAYSTACK_KEY.includes('xxx') ||
+  PAYSTACK_KEY.toLowerCase() === 'sk_test_' ||
+  PAYSTACK_KEY.length < 20;
+if (FAKE_PAYMENTS) {
+  // eslint-disable-next-line no-console
+  console.warn('[payments] PAYSTACK_SECRET_KEY missing or placeholder — running in FAKE payment mode (all payments auto-succeed).');
+}
 
 router.use(authenticate);
 
@@ -46,6 +61,48 @@ router.post(
     });
 
     const reference = `TXN_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+    // ─── FAKE MODE ──────────────────────────────────────
+    // No Paystack key configured: pretend the charge succeeded immediately.
+    if (FAKE_PAYMENTS) {
+      const payment = await prisma.payment.upsert({
+        where: { deliveryId },
+        update: {
+          amount: delivery.totalFee,
+          method,
+          status: 'SUCCESS',
+          paystackRef: reference,
+        },
+        create: {
+          deliveryId,
+          userId: req.user!.userId,
+          amount: delivery.totalFee,
+          method,
+          status: 'SUCCESS',
+          paystackRef: reference,
+        },
+      });
+
+      await prisma.delivery.update({
+        where: { id: deliveryId },
+        data: { status: 'PAID', paidAt: new Date() },
+      });
+
+      // Kick off the dev lifecycle simulator so the customer app can see the
+      // order progress through finding → assigned → picked up → in transit
+      // → delivered without needing a real rider device.
+      simulateDeliveryProgression(deliveryId);
+
+      return res.json({
+        success: true,
+        data: {
+          payment,
+          requiresAction: false,
+          reference,
+          fake: true,
+        },
+      });
+    }
 
     // If using saved card with authorization code
     if (savedCardId && method === 'CARD') {
@@ -152,6 +209,25 @@ router.post(
     if (!payment) throw new AppError('Payment not found', 404);
     if (payment.userId !== req.user!.userId) {
       throw new AppError('Not authorized', 403);
+    }
+
+    // ─── FAKE MODE ──────────────────────────────────────
+    if (FAKE_PAYMENTS) {
+      if (payment.status !== 'SUCCESS') {
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: 'SUCCESS' },
+        });
+        await prisma.delivery.update({
+          where: { id: payment.deliveryId },
+          data: { status: 'PAID', paidAt: new Date() },
+        });
+      }
+      return res.json({
+        success: true,
+        message: 'Payment verified successfully (fake mode)',
+        data: { status: 'SUCCESS', deliveryId: payment.deliveryId },
+      });
     }
 
     // Verify with Paystack

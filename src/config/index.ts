@@ -29,6 +29,16 @@ export const config = {
     mapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
   },
 
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+    apiKey: process.env.CLOUDINARY_API_KEY || '',
+    apiSecret: process.env.CLOUDINARY_API_SECRET || '',
+    folder: process.env.CLOUDINARY_FOLDER || 'tunnel-express',
+    get enabled() {
+      return Boolean(this.cloudName && this.apiKey && this.apiSecret);
+    },
+  },
+
   pricing: {
     baseFee: parseFloat(process.env.BASE_FEE_NGN || '500'),
     perKmFee: parseFloat(process.env.PER_KM_FEE_NGN || '100'),
@@ -42,5 +52,14 @@ export const config = {
   termii: {
     apiKey: process.env.TERMII_API_KEY || '',
     senderId: process.env.TERMII_SENDER_ID || 'TunnelXpr',
+  },
+
+  smtp: {
+    host: process.env.SMTP_HOST || '',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.SMTP_FROM || 'Tunnel Express <no-reply@tunnel-xpress.com>',
   },
 };

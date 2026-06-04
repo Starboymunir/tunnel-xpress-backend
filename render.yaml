@@ -30,3 +30,12 @@ services:
         value: "10"
       - key: FRONTEND_URL
         value: "*"
+      # Cloudinary — set actual values in the Render dashboard (not committed)
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: "tunnel-express"

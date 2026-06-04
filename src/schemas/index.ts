@@ -17,6 +17,14 @@ export const registerPhoneSchema = z.object({
   referralCode: z.string().optional(),
 });
 
+export const registerGoogleSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+  avatarUrl: z.string().url().optional(),
+  googleId: z.string().optional(),
+});
+
 export const loginEmailSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),

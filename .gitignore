@@ -3,3 +3,11 @@ dist/
 .env
 *.log
 uploads/
+
+# Local probe/test scratch files
+_probe.js
+_probe.out
+*.out
+test-live.js
+_test-endpoints-live.js
+live-test-results.txt
