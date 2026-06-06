@@ -59,6 +59,11 @@ export function initializeSocketIO(httpServer: HttpServer) {
       socket.leave(`delivery:${deliveryId}`);
     });
 
+    // Relay typing indicator to the other party in the delivery room.
+    socket.on('delivery:typing', (deliveryId: string) => {
+      socket.to(`delivery:${deliveryId}`).emit('delivery:typing', { deliveryId, userId });
+    });
+
     // ─── RIDER: Update live location ─────────────────
     socket.on('rider:location', async (data: { lat: number; lng: number; deliveryId?: string }) => {
       if (role !== 'RIDER') return;

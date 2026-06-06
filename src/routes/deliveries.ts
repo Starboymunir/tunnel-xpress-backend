@@ -329,6 +329,9 @@ router.get(
         liveRiderLat: true,
         liveRiderLng: true,
         estimatedMinutes: true,
+        orderTag: true,
+        packageName: true,
+        customer: { select: { id: true, firstName: true, lastName: true, phone: true, avatarUrl: true } },
         rider: {
           select: {
             currentLat: true,
@@ -337,7 +340,7 @@ router.get(
             avgRating: true,
             totalDeliveries: true,
             plateNumber: true,
-            user: { select: { firstName: true, lastName: true, phone: true, avatarUrl: true } },
+            user: { select: { id: true, firstName: true, lastName: true, phone: true, avatarUrl: true } },
           },
         },
       },
