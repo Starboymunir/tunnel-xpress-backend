@@ -60,6 +60,7 @@ enum NotificationType {
   SYSTEM
   PAYMENT
   RIDER
+  REFERRAL
 }
 
 enum SupportTicketStatus {

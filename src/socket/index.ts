@@ -279,8 +279,21 @@ export async function emitNotification(userId: string, notification: {
   body: string;
   data?: any;
 }) {
+  // Persist so it shows up in the notifications list (and survives reconnect).
+  let saved: any = null;
+  try {
+    saved = await prisma.notification.create({
+      data: {
+        userId,
+        type: notification.type as any,
+        title: notification.title,
+        body: notification.body,
+        data: notification.data ?? undefined,
+      },
+    });
+  } catch {}
   if (!io) return;
-  io.to(`user:${userId}`).emit('notification', notification);
+  io.to(`user:${userId}`).emit('notification', saved ?? notification);
 }
 
 // ─── RIDER MATCHING: Find nearest available rider ───────
