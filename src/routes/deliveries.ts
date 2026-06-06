@@ -39,6 +39,17 @@ router.post(
   })
 );
 
+// ─── NEXT ORDER TAG (preview, before the order is created) ──
+// Registered before any "/:id" route so it isn't captured as an id.
+
+router.get(
+  '/next-order-tag',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const orderTag = await generateOrderTag();
+    res.json({ success: true, data: { orderTag } });
+  })
+);
+
 // ─── CREATE DELIVERY ────────────────────────────────────
 
 router.post(
