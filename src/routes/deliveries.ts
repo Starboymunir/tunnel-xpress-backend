@@ -348,4 +348,51 @@ router.get(
   })
 );
 
+// ─── DELIVERY CHAT (customer ↔ assigned rider) ──────────
+
+/** Returns the sender role if the user is a party to this delivery, else null. */
+async function chatRoleFor(deliveryId: string, userId: string): Promise<'CUSTOMER' | 'RIDER' | null> {
+  const delivery = await prisma.delivery.findUnique({
+    where: { id: deliveryId },
+    select: { customerId: true, rider: { select: { userId: true } } },
+  });
+  if (!delivery) return null;
+  if (delivery.customerId === userId) return 'CUSTOMER';
+  if (delivery.rider?.userId === userId) return 'RIDER';
+  return null;
+}
+
+router.get(
+  '/:id/messages',
+  asyncHandler(async (req: Request, res: Response) => {
+    const role = await chatRoleFor(req.params.id as string, req.user!.userId);
+    if (!role) throw new AppError('You are not part of this delivery', 403);
+
+    const messages = await prisma.deliveryMessage.findMany({
+      where: { deliveryId: req.params.id as string },
+      orderBy: { createdAt: 'asc' },
+      take: 200,
+    });
+
+    res.json({ success: true, data: messages });
+  })
+);
+
+router.post(
+  '/:id/messages',
+  asyncHandler(async (req: Request, res: Response) => {
+    const role = await chatRoleFor(req.params.id as string, req.user!.userId);
+    if (!role) throw new AppError('You are not part of this delivery', 403);
+
+    const content = (req.body?.content ?? '').toString().trim();
+    if (!content) throw new AppError('Message cannot be empty', 400);
+
+    const message = await prisma.deliveryMessage.create({
+      data: { deliveryId: req.params.id as string, senderId: req.user!.userId, senderRole: role, content },
+    });
+
+    res.status(201).json({ success: true, data: message });
+  })
+);
+
 export default router;

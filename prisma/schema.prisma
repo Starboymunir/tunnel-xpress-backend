@@ -439,3 +439,16 @@ model PromoBanner {
 
   @@map("promo_banners")
 }
+
+// ─── DELIVERY CHAT (customer ↔ assigned rider) ──────────
+model DeliveryMessage {
+  id         String   @id @default(uuid())
+  deliveryId String
+  senderId   String
+  senderRole String   // 'CUSTOMER' | 'RIDER'
+  content    String
+  createdAt  DateTime @default(now())
+
+  @@index([deliveryId])
+  @@map("delivery_messages")
+}
