@@ -7,6 +7,7 @@ import { validate, validateQuery } from '../middleware/validate';
 import { createDeliverySchema, rateDeliverySchema, calculateFeeSchema } from '../schemas';
 import { generateOrderTag } from '../lib/generators';
 import { calculateDeliveryFee, estimateDeliveryTime, haversineDistance } from '../lib/pricing';
+import { emitDeliveryMessage } from '../socket';
 import { z } from 'zod';
 
 const router = Router();
@@ -390,6 +391,8 @@ router.post(
     const message = await prisma.deliveryMessage.create({
       data: { deliveryId: req.params.id as string, senderId: req.user!.userId, senderRole: role, content },
     });
+
+    emitDeliveryMessage(req.params.id as string, message);
 
     res.status(201).json({ success: true, data: message });
   })

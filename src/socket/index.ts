@@ -44,6 +44,8 @@ export function initializeSocketIO(httpServer: HttpServer) {
 
     // Join personal room for notifications
     socket.join(`user:${userId}`);
+    // Riders also join a shared room so new orders can be broadcast to them
+    if (role === 'RIDER') socket.join('riders');
 
     console.log(`[Socket] ${role} ${userId} connected`);
 
@@ -253,6 +255,20 @@ export async function emitDeliveryStatus(deliveryId: string, status: string, ext
     status,
     ...extraData,
   });
+}
+
+// ─── HELPER: Emit a new chat message to a delivery room ─
+
+export function emitDeliveryMessage(deliveryId: string, message: any) {
+  if (!io) return;
+  io.to(`delivery:${deliveryId}`).emit('delivery:message', message);
+}
+
+// ─── HELPER: Broadcast to all connected riders ──────────
+
+export function emitToRiders(event: string, data: any) {
+  if (!io) return;
+  io.to('riders').emit(event, data);
 }
 
 // ─── HELPER: Send notification to specific user ─────────

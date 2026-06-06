@@ -7,6 +7,7 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { initPaymentSchema, verifyPaymentSchema } from '../schemas';
 import { config } from '../config';
+import { emitToRiders } from '../socket';
 
 const router = Router();
 
@@ -84,10 +85,12 @@ router.post(
 
       // Mark as paid and awaiting a rider. The rider app drives the rest of
       // the lifecycle (accept → picked up → in transit → delivered).
-      await prisma.delivery.update({
+      const finding = await prisma.delivery.update({
         where: { id: deliveryId },
         data: { status: 'FINDING_RIDER', paidAt: new Date() },
+        select: { id: true, orderTag: true, pickupAddress: true, dropoffAddress: true, totalFee: true, distanceKm: true, packageName: true, riderType: true },
       });
+      emitToRiders('rider:newDelivery', finding);
 
       return res.json({
         success: true,

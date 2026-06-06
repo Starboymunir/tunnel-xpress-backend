@@ -3,6 +3,7 @@ import prisma from '../lib/prisma';
 import { AppError } from '../lib/errors';
 import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate } from '../middleware/auth';
+import { emitDeliveryStatus, emitNotification } from '../socket';
 
 const router = Router();
 
@@ -105,6 +106,13 @@ router.post(
       select: ORDER_SELECT,
     });
 
+    emitDeliveryStatus(delivery.id, 'RIDER_ASSIGNED');
+    emitNotification(delivery.customerId, {
+      type: 'RIDER',
+      title: 'Rider Assigned',
+      body: 'A rider has accepted your order and is on the way to pick it up.',
+    });
+
     res.json({ success: true, data: updated });
   })
 );
@@ -149,6 +157,14 @@ router.post(
         data: { totalDeliveries: { increment: 1 } },
       });
     }
+
+    emitDeliveryStatus(delivery.id, expected);
+    const notif: Record<string, { title: string; body: string }> = {
+      PICKED_UP: { title: 'Package Picked Up', body: 'Your package has been picked up and is on its way.' },
+      IN_TRANSIT: { title: 'In Transit', body: 'Your package is now in transit.' },
+      DELIVERED: { title: 'Delivered', body: 'Your package has been delivered successfully.' },
+    };
+    if (notif[expected]) emitNotification(delivery.customerId, { type: 'ORDER', ...notif[expected] });
 
     res.json({ success: true, data: updated });
   })
