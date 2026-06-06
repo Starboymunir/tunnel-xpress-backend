@@ -7,7 +7,6 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { initPaymentSchema, verifyPaymentSchema } from '../schemas';
 import { config } from '../config';
-import { simulateDeliveryProgression } from '../lib/devSimulator';
 
 const router = Router();
 
@@ -83,15 +82,12 @@ router.post(
         },
       });
 
+      // Mark as paid and awaiting a rider. The rider app drives the rest of
+      // the lifecycle (accept → picked up → in transit → delivered).
       await prisma.delivery.update({
         where: { id: deliveryId },
-        data: { status: 'PAID', paidAt: new Date() },
+        data: { status: 'FINDING_RIDER', paidAt: new Date() },
       });
-
-      // Kick off the dev lifecycle simulator so the customer app can see the
-      // order progress through finding → assigned → picked up → in transit
-      // → delivered without needing a real rider device.
-      simulateDeliveryProgression(deliveryId);
 
       return res.json({
         success: true,
@@ -143,7 +139,7 @@ router.post(
       if (chargeResponse.success) {
         await prisma.delivery.update({
           where: { id: deliveryId },
-          data: { status: 'PAID', paidAt: new Date() },
+          data: { status: 'FINDING_RIDER', paidAt: new Date() },
         });
       }
 
@@ -220,7 +216,7 @@ router.post(
         });
         await prisma.delivery.update({
           where: { id: payment.deliveryId },
-          data: { status: 'PAID', paidAt: new Date() },
+          data: { status: 'FINDING_RIDER', paidAt: new Date() },
         });
       }
       return res.json({
