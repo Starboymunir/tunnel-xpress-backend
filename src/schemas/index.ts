@@ -159,3 +159,33 @@ export const calculateFeeSchema = z.object({
   dropoffLng: z.number(),
   riderType: z.enum(['BIKE', 'CAR', 'VAN']).default('BIKE'),
 });
+
+// ─── RIDER VERIFICATION (KYC) ───────────────────────────
+
+export const submitVerificationSchema = z.object({
+  // Personal details
+  fullName: z.string().min(3, 'Full name is required'),
+  dateOfBirth: z.string().min(1, 'Date of birth is required'),
+  homeAddress: z.string().optional(),
+  phone: z.string().optional(),
+  // Government ID
+  idType: z.string().min(1, 'ID type is required'),
+  idFrontUrl: z.string().min(1, 'A front-of-ID image is required'),
+  idBackUrl: z.string().optional(),
+  // Selfie
+  selfieUrl: z.string().min(1, 'A selfie is required'),
+  // Rider permit
+  permitType: z.string().min(1, 'Permit type is required'),
+  permitNumber: z.string().min(1, 'Permit number is required'),
+  permitExpiry: z.string().min(1, 'Permit expiry is required'),
+  permitUrl: z.string().min(1, 'A permit image is required'),
+  // Vehicle
+  plateNumber: z.string().min(1, 'Plate number is required'),
+  vehicleColor: z.string().optional(),
+  vehiclePhotoUrl: z.string().optional(),
+});
+
+export const reviewVerificationSchema = z.object({
+  decision: z.enum(['approve', 'reject']),
+  reason: z.string().optional(),
+});

@@ -3,6 +3,9 @@ import prisma from '../lib/prisma';
 import { AppError } from '../lib/errors';
 import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { submitVerificationSchema, reviewVerificationSchema } from '../schemas';
+import { config } from '../config';
 import { emitDeliveryStatus, emitNotification } from '../socket';
 
 const router = Router();
@@ -167,6 +170,101 @@ router.post(
     if (notif[expected]) emitNotification(delivery.customerId, { type: 'ORDER', ...notif[expected] });
 
     res.json({ success: true, data: updated });
+  })
+);
+
+// ─── KYC VERIFICATION ───────────────────────────────────
+
+// Current rider's verification status + submitted bundle (if any).
+router.get(
+  '/verification',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const verification = await prisma.riderVerification.findUnique({
+      where: { riderProfileId: profile.id },
+    });
+
+    res.json({
+      success: true,
+      data: { status: profile.verificationStatus, verification },
+    });
+  })
+);
+
+// Submit (or re-submit) the KYC bundle → status PENDING.
+router.post(
+  '/verification',
+  validate(submitVerificationSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const body = req.body as Record<string, unknown>;
+
+    const verification = await prisma.riderVerification.upsert({
+      where: { riderProfileId: profile.id },
+      create: { riderProfileId: profile.id, status: 'PENDING', submittedAt: new Date(), ...body } as any,
+      update: { status: 'PENDING', rejectionReason: null, reviewedAt: null, submittedAt: new Date(), ...body } as any,
+    });
+
+    await prisma.riderProfile.update({
+      where: { id: profile.id },
+      data: {
+        verificationStatus: 'PENDING',
+        isApproved: false, // can't take orders until reviewed
+        // Keep the rider's working fields in sync with what they submitted.
+        plateNumber: (body.plateNumber as string) || profile.plateNumber,
+        licenseNumber: (body.permitNumber as string) || profile.licenseNumber,
+      },
+    });
+
+    res.status(201).json({ success: true, data: { status: 'PENDING', verification } });
+  })
+);
+
+// Review a rider's submission (ADMIN; also allowed self-review in non-production for testing).
+router.post(
+  '/verification/review',
+  validate(reviewVerificationSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const isAdmin = req.user!.role === 'ADMIN';
+    const allowSelf = config.env !== 'production';
+    if (!isAdmin && !allowSelf) throw new AppError('Insufficient permissions', 403);
+
+    const { decision, reason } = req.body as { decision: 'approve' | 'reject'; reason?: string };
+    const targetProfileId = (req.body.riderProfileId as string | undefined) || (await getRiderProfile(req.user!.userId))?.id;
+    if (!targetProfileId) throw new AppError('Rider profile not found', 404);
+
+    const verification = await prisma.riderVerification.findUnique({ where: { riderProfileId: targetProfileId } });
+    if (!verification) throw new AppError('No verification submitted', 404);
+
+    const approved = decision === 'approve';
+    const updated = await prisma.riderVerification.update({
+      where: { riderProfileId: targetProfileId },
+      data: {
+        status: approved ? 'APPROVED' : 'REJECTED',
+        rejectionReason: approved ? null : reason || 'Your data are not consistent with data on ID, please review and re-upload.',
+        reviewedAt: new Date(),
+      },
+    });
+
+    const rider = await prisma.riderProfile.update({
+      where: { id: targetProfileId },
+      data: { verificationStatus: approved ? 'APPROVED' : 'REJECTED', isApproved: approved },
+      select: { userId: true },
+    });
+
+    emitNotification(rider.userId, {
+      type: 'RIDER',
+      title: approved ? 'Verification Approved' : 'Verification Rejected',
+      body: approved
+        ? 'Your account has been verified. You can now go online.'
+        : updated.rejectionReason || 'Your verification was rejected. Please review and re-upload.',
+    });
+
+    res.json({ success: true, data: { status: updated.status, verification: updated } });
   })
 );
 
