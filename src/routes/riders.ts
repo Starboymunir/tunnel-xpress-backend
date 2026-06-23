@@ -410,8 +410,31 @@ router.get(
         verificationStatus: profile.verificationStatus,
         totalDeliveries: profile.totalDeliveries,
         avgRating: profile.avgRating,
+        vehicleType: profile.vehicleType,
+        plateNumber: profile.plateNumber,
       },
     });
+  })
+);
+
+// ─── UPDATE RIDER VEHICLE / PROFILE ─────────────────────
+router.patch(
+  '/profile',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const data: { vehicleType?: 'BIKE' | 'CAR' | 'VAN'; plateNumber?: string } = {};
+    const vt = req.body?.vehicleType;
+    if (vt === 'BIKE' || vt === 'CAR' || vt === 'VAN') data.vehicleType = vt;
+    if (typeof req.body?.plateNumber === 'string') data.plateNumber = req.body.plateNumber.trim().toUpperCase();
+
+    const updated = await prisma.riderProfile.update({
+      where: { id: profile.id },
+      data,
+      select: { vehicleType: true, plateNumber: true },
+    });
+    res.json({ success: true, data: updated });
   })
 );
 
