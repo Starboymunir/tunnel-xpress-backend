@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { submitVerificationSchema, reviewVerificationSchema, payoutAccountSchema } from '../schemas';
 import { config } from '../config';
+import { maybeRewardReferral } from '../lib/referralReward';
 import { emitDeliveryStatus, emitNotification } from '../socket';
 
 const router = Router();
@@ -61,7 +62,11 @@ router.get(
     if (!profile) throw new AppError('Not a rider account', 403);
 
     const orders = await prisma.delivery.findMany({
-      where: { riderId: null, status: { in: ['FINDING_RIDER', 'PAID'] } },
+      where: {
+        riderId: null,
+        status: { in: ['FINDING_RIDER', 'PAID'] },
+        NOT: { declinedRiderIds: { has: profile.id } },
+      },
       orderBy: { createdAt: 'desc' },
       take: 50,
       select: ORDER_SELECT,
@@ -120,6 +125,26 @@ router.post(
   })
 );
 
+// ─── DECLINE AN ORDER ───────────────────────────────────
+router.post(
+  '/orders/:id/decline',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const delivery = await prisma.delivery.findUnique({ where: { id: String(req.params.id) }, select: { id: true, declinedRiderIds: true } });
+    if (!delivery) throw new AppError('Order not found', 404);
+
+    if (!delivery.declinedRiderIds.includes(profile.id)) {
+      await prisma.delivery.update({
+        where: { id: delivery.id },
+        data: { declinedRiderIds: { push: profile.id } },
+      });
+    }
+    res.json({ success: true, data: { declined: true } });
+  })
+);
+
 // Rider keeps this share of each delivery's total fee.
 const COMMISSION_RATE = 0.8;
 
@@ -169,6 +194,8 @@ router.post(
         create: { riderProfileId: profile.id, deliveryId: delivery.id, amount, distanceKm: delivery.distanceKm ?? 0 },
         update: {},
       });
+      // Reward the customer's referrer if this was their first completed delivery.
+      await maybeRewardReferral(delivery.customerId);
     }
 
     emitDeliveryStatus(delivery.id, expected);
@@ -275,6 +302,26 @@ router.post(
     });
 
     res.json({ success: true, data: { status: updated.status, verification: updated } });
+  })
+);
+
+// ─── RIDER SUMMARY ──────────────────────────────────────
+router.get(
+  '/me',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+    res.json({
+      success: true,
+      data: {
+        online: profile.availability === 'ONLINE',
+        availability: profile.availability,
+        isApproved: profile.isApproved,
+        verificationStatus: profile.verificationStatus,
+        totalDeliveries: profile.totalDeliveries,
+        avgRating: profile.avgRating,
+      },
+    });
   })
 );
 

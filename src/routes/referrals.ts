@@ -3,6 +3,7 @@ import prisma from '../lib/prisma';
 import { AppError } from '../lib/errors';
 import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate } from '../middleware/auth';
+import { REFERRAL_BONUS } from '../lib/referralReward';
 
 const router = Router();
 
@@ -88,7 +89,8 @@ router.post(
       data: {
         referrerId: referrer.id,
         referredId: req.user!.userId,
-        bonusAmount: 200,
+        bonusAmount: REFERRAL_BONUS,
+        status: 'JOINED',
       },
     });
 

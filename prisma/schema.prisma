@@ -347,6 +347,9 @@ model Delivery {
   pickupCode       String?
   dropoffCode      String?
 
+  // Riders who declined this request (excluded from their available list)
+  declinedRiderIds String[]      @default([])
+
   // Relations
   customer  User          @relation("CustomerDeliveries", fields: [customerId], references: [id])
   rider     RiderProfile? @relation("RiderDeliveries", fields: [riderId], references: [id])
@@ -498,12 +501,20 @@ model SavedLocation {
 
 // ─── REFERRALS ──────────────────────────────────────────
 
+enum ReferralStatus {
+  PENDING
+  JOINED
+  COMPLETED
+}
+
 model Referral {
-  id          String   @id @default(uuid())
+  id          String         @id @default(uuid())
   referrerId  String
   referredId  String
-  bonusAmount Float    @default(0)
-  isPaid      Boolean  @default(false)
+  bonusAmount Float          @default(0)
+  isPaid      Boolean        @default(false)
+  status      ReferralStatus @default(PENDING)
+  completedAt DateTime?
 
   createdAt   DateTime @default(now())
 
