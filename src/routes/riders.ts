@@ -504,6 +504,48 @@ router.get(
   })
 );
 
+// ─── REQUEST A PAYOUT (settle pending earnings) ─────────
+router.post(
+  '/payouts/request',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const account = await prisma.riderPayoutAccount.findUnique({ where: { riderProfileId: profile.id } });
+    if (!account || account.status !== 'VERIFIED') {
+      throw new AppError('Add a verified payout account before requesting a payout', 400);
+    }
+
+    const pending = await prisma.riderEarning.findMany({
+      where: { riderProfileId: profile.id, status: 'PENDING' },
+      select: { id: true, amount: true },
+    });
+    if (pending.length === 0) throw new AppError('You have no pending earnings to pay out', 400);
+
+    const amount = pending.reduce((s, e) => s + e.amount, 0);
+    const reference = `PO-${Date.now().toString(36).toUpperCase()}`;
+    const periodMonth = new Date().toISOString().slice(0, 7);
+
+    // In production this would create a Paystack Transfer (status PROCESSING) and
+    // settle on the transfer.success webhook. Here we mark it paid immediately.
+    const payout = await prisma.payout.create({
+      data: { riderProfileId: profile.id, reference, amount, status: 'PAID', payoutAccountId: account.id, periodMonth, paidAt: new Date() },
+    });
+    await prisma.riderEarning.updateMany({
+      where: { riderProfileId: profile.id, status: 'PENDING' },
+      data: { status: 'PAID', payoutId: payout.id, paidAt: new Date() },
+    });
+
+    emitNotification(req.user!.userId, {
+      type: 'PAYMENT',
+      title: 'Payout sent',
+      body: `₦${amount.toLocaleString()} has been paid to your ${account.bankName} account (${account.last4}).`,
+    });
+
+    res.json({ success: true, data: { reference, amount, status: payout.status } });
+  })
+);
+
 // ─── PAYOUT ACCOUNT ─────────────────────────────────────
 router.get(
   '/payout-account',
