@@ -301,52 +301,48 @@ export async function emitNotification(userId: string, notification: {
   io.to(`user:${userId}`).emit('notification', saved ?? notification);
 }
 
-// ─── RIDER MATCHING: Find nearest available rider ───────
+// ─── RIDER MATCHING: notify available riders of a new job ───────
+// Persists a notification per eligible rider (so it shows in the bell + list)
+// AND emits it in real time. Riders without a known location still get notified;
+// when location is known we rank closest-first.
 
-export async function findAndNotifyRiders(deliveryId: string) {
-  const delivery = await prisma.delivery.findUnique({
-    where: { id: deliveryId },
-  });
+export async function notifyRidersOfNewDelivery(deliveryId: string) {
+  const delivery = await prisma.delivery.findUnique({ where: { id: deliveryId } });
+  if (!delivery || delivery.status !== 'FINDING_RIDER') return;
 
-  if (!delivery) return;
-
-  // Find online riders matching the vehicle type
   const riders = await prisma.riderProfile.findMany({
     where: {
       availability: 'ONLINE',
       isApproved: true,
       vehicleType: delivery.riderType,
-      currentLat: { not: null },
-      currentLng: { not: null },
     },
-    include: {
-      user: { select: { id: true } },
-    },
-    take: 10,
+    select: { id: true, userId: true, currentLat: true, currentLng: true },
+    take: 50,
   });
 
-  // Sort by distance to pickup
-  const ridersWithDistance = riders
-    .map((rider: typeof riders[number]) => {
-      const dist = Math.sqrt(
-        (rider.currentLat! - delivery.pickupLat) ** 2 +
-        (rider.currentLng! - delivery.pickupLng) ** 2
-      );
-      return { rider, dist };
-    })
-    .sort((a: { dist: number }, b: { dist: number }) => a.dist - b.dist);
+  const declined = new Set(delivery.declinedRiderIds ?? []);
+  const ranked = riders
+    .filter((r) => !declined.has(r.id))
+    .map((r) => ({
+      r,
+      dist:
+        r.currentLat != null && r.currentLng != null
+          ? Math.hypot(r.currentLat - delivery.pickupLat, r.currentLng - delivery.pickupLng)
+          : Number.POSITIVE_INFINITY,
+    }))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 10);
 
-  // Notify closest riders
-  for (const { rider } of ridersWithDistance.slice(0, 5)) {
-    io?.to(`user:${rider.user.id}`).emit('rider:newDelivery', {
-      deliveryId: delivery.id,
-      orderTag: delivery.orderTag,
-      pickupAddress: delivery.pickupAddress,
-      dropoffAddress: delivery.dropoffAddress,
-      totalFee: delivery.totalFee,
-      distanceKm: delivery.distanceKm,
-      packageName: delivery.packageName,
-      riderType: delivery.riderType,
+  const fee = Number(delivery.totalFee).toLocaleString();
+  for (const { r } of ranked) {
+    await emitNotification(r.userId, {
+      type: 'ORDER',
+      title: 'New delivery available',
+      body: `${delivery.packageName || 'A package'} · ₦${fee} · ${delivery.pickupAddress} → ${delivery.dropoffAddress}`,
+      data: {
+        deliveryId: delivery.id,
+        action: { label: 'View order', variant: 'purple', route: '/rider/orders' },
+      },
     });
   }
 }

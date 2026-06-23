@@ -7,7 +7,7 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { initPaymentSchema, verifyPaymentSchema } from '../schemas';
 import { config } from '../config';
-import { emitToRiders } from '../socket';
+import { emitToRiders, notifyRidersOfNewDelivery } from '../socket';
 
 const router = Router();
 
@@ -91,6 +91,7 @@ router.post(
         select: { id: true, orderTag: true, pickupAddress: true, dropoffAddress: true, totalFee: true, distanceKm: true, packageName: true, riderType: true },
       });
       emitToRiders('rider:newDelivery', finding);
+      notifyRidersOfNewDelivery(finding.id).catch(() => {});
 
       return res.json({
         success: true,
@@ -144,6 +145,8 @@ router.post(
           where: { id: deliveryId },
           data: { status: 'FINDING_RIDER', paidAt: new Date() },
         });
+        emitToRiders('rider:newDelivery', { deliveryId });
+        notifyRidersOfNewDelivery(deliveryId).catch(() => {});
       }
 
       return res.json({
@@ -221,6 +224,8 @@ router.post(
           where: { id: payment.deliveryId },
           data: { status: 'FINDING_RIDER', paidAt: new Date() },
         });
+        emitToRiders('rider:newDelivery', { deliveryId: payment.deliveryId });
+        notifyRidersOfNewDelivery(payment.deliveryId).catch(() => {});
       }
       return res.json({
         success: true,
