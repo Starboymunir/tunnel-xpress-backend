@@ -145,6 +145,7 @@ model RiderProfile {
   userId          String            @unique
   vehicleType     RiderType         @default(BIKE)
   plateNumber     String?
+  vehicleColor    String?
   licenseNumber   String?
   availability    RiderAvailability @default(OFFLINE)
   currentLat      Float?

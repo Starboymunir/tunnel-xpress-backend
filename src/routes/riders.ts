@@ -412,6 +412,7 @@ router.get(
         avgRating: profile.avgRating,
         vehicleType: profile.vehicleType,
         plateNumber: profile.plateNumber,
+        vehicleColor: profile.vehicleColor,
       },
     });
   })
@@ -424,15 +425,16 @@ router.patch(
     const profile = await getRiderProfile(req.user!.userId);
     if (!profile) throw new AppError('Not a rider account', 403);
 
-    const data: { vehicleType?: 'BIKE' | 'CAR' | 'VAN'; plateNumber?: string } = {};
+    const data: { vehicleType?: 'BIKE' | 'CAR' | 'VAN'; plateNumber?: string; vehicleColor?: string } = {};
     const vt = req.body?.vehicleType;
     if (vt === 'BIKE' || vt === 'CAR' || vt === 'VAN') data.vehicleType = vt;
     if (typeof req.body?.plateNumber === 'string') data.plateNumber = req.body.plateNumber.trim().toUpperCase();
+    if (typeof req.body?.vehicleColor === 'string') data.vehicleColor = req.body.vehicleColor.trim();
 
     const updated = await prisma.riderProfile.update({
       where: { id: profile.id },
       data,
-      select: { vehicleType: true, plateNumber: true },
+      select: { vehicleType: true, plateNumber: true, vehicleColor: true },
     });
     res.json({ success: true, data: updated });
   })
