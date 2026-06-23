@@ -8,6 +8,7 @@ import { authenticate } from '../middleware/auth';
 import { generateTokenPair, verifyRefreshToken } from '../lib/tokens';
 import { createOTP, verifyOTP } from '../lib/otp';
 import { sendOtpEmail } from '../lib/email';
+import { sendOtpSms, smsProviderConfigured } from '../lib/sms';
 import { generateReferralCode } from '../lib/generators';
 import {
   registerEmailSchema,
@@ -195,15 +196,15 @@ router.post(
       });
     }
 
-    // Send OTP via SMS
+    // Send OTP via SMS (Termii). When no provider is configured, surface the
+    // code so the account can still be verified during testing.
     const otpCode = await createOTP(phone);
-    // TODO: Send SMS with otpCode via Termii
-    console.log(`[DEV] Phone OTP for ${phone}: ${otpCode}`);
+    await sendOtpSms(phone, otpCode);
 
     res.status(201).json({
       success: true,
       message: 'OTP sent to your phone.',
-      data: { phone, otpSent: true },
+      data: { phone, otpSent: true, ...(smsProviderConfigured() ? {} : { devCode: otpCode }) },
     });
   })
 );
@@ -263,13 +264,12 @@ router.post(
     if (!user.isActive) throw new AppError('Account is deactivated', 403);
 
     const otpCode = await createOTP(phone);
-    // TODO: Send SMS
-    console.log(`[DEV] Login OTP for ${phone}: ${otpCode}`);
+    await sendOtpSms(phone, otpCode);
 
     res.json({
       success: true,
       message: 'OTP sent to your phone.',
-      data: { phone, otpSent: true },
+      data: { phone, otpSent: true, ...(smsProviderConfigured() ? {} : { devCode: otpCode }) },
     });
   })
 );
@@ -329,14 +329,17 @@ router.post(
     if (!identifier) throw new AppError('Email or phone is required', 400);
 
     const otpCode = await createOTP(identifier);
-    console.log(`[DEV] Resend OTP for ${identifier}: ${otpCode}`);
-    if (identifier.includes('@')) {
+    const isEmail = identifier.includes('@');
+    if (isEmail) {
       await sendOtpEmail(identifier, otpCode);
+    } else {
+      await sendOtpSms(identifier, otpCode);
     }
 
     res.json({
       success: true,
       message: 'OTP resent successfully',
+      data: !isEmail && !smsProviderConfigured() ? { devCode: otpCode } : undefined,
     });
   })
 );
