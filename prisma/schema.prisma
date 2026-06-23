@@ -583,16 +583,26 @@ model OTP {
 
 model PromoBanner {
   id        String   @id @default(uuid())
+  slug      String?  @unique
   title     String
   subtitle  String?
+  body      String?
   imageUrl  String?
+  illustration String?
   linkUrl   String?
+  ctaLabel  String?
+  ctaDeepLink String?
+  theme     String?  // teal | magenta | deepViolet | violet | lime
+  audience  String   @default("ALL") // ALL | RIDER | CUSTOMER
   isActive  Boolean  @default(true)
+  priority  Int      @default(0)
   sortOrder Int      @default(0)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  validFrom DateTime?
   expiresAt DateTime?
 
+  @@index([audience, isActive])
   @@map("promo_banners")
 }
 
