@@ -4,7 +4,7 @@ import { AppError } from '../lib/errors';
 import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { submitVerificationSchema, reviewVerificationSchema } from '../schemas';
+import { submitVerificationSchema, reviewVerificationSchema, payoutAccountSchema } from '../schemas';
 import { config } from '../config';
 import { emitDeliveryStatus, emitNotification } from '../socket';
 
@@ -120,6 +120,9 @@ router.post(
   })
 );
 
+// Rider keeps this share of each delivery's total fee.
+const COMMISSION_RATE = 0.8;
+
 // ─── ADVANCE ORDER STATUS ───────────────────────────────
 const NEXT_STATUS: Record<string, 'PICKED_UP' | 'IN_TRANSIT' | 'DELIVERED'> = {
   RIDER_ASSIGNED: 'PICKED_UP',
@@ -158,6 +161,13 @@ router.post(
       await prisma.riderProfile.update({
         where: { id: profile.id },
         data: { totalDeliveries: { increment: 1 } },
+      });
+      // Record the rider's commission for this trip (idempotent on deliveryId).
+      const amount = Math.round((delivery.totalFee ?? 0) * COMMISSION_RATE);
+      await prisma.riderEarning.upsert({
+        where: { deliveryId: delivery.id },
+        create: { riderProfileId: profile.id, deliveryId: delivery.id, amount, distanceKm: delivery.distanceKm ?? 0 },
+        update: {},
       });
     }
 
@@ -265,6 +275,123 @@ router.post(
     });
 
     res.json({ success: true, data: { status: updated.status, verification: updated } });
+  })
+);
+
+// ─── AVAILABILITY (online toggle) ───────────────────────
+router.patch(
+  '/availability',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+    const online = req.body?.online === true || req.body?.availability === 'ONLINE';
+    const updated = await prisma.riderProfile.update({
+      where: { id: profile.id },
+      data: { availability: online ? 'ONLINE' : 'OFFLINE' },
+      select: { availability: true },
+    });
+    res.json({ success: true, data: { availability: updated.availability, online: updated.availability === 'ONLINE' } });
+  })
+);
+
+// ─── EARNINGS ───────────────────────────────────────────
+// range=pending → unpaid ledger + breakdown; range=paid → settled payout history.
+router.get(
+  '/earnings',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const range = String(req.query.range || 'pending');
+    const account = await prisma.riderPayoutAccount.findUnique({ where: { riderProfileId: profile.id } });
+    const hasPayoutDetails = !!account && account.status === 'VERIFIED';
+
+    if (range === 'paid') {
+      const payouts = await prisma.payout.findMany({
+        where: { riderProfileId: profile.id },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      });
+      const totalPaid = payouts.filter((p) => p.status === 'PAID').reduce((s, p) => s + p.amount, 0);
+      // Group payouts by month label.
+      const groups: Record<string, { month: string; total: number; payouts: any[] }> = {};
+      for (const p of payouts) {
+        const key = p.periodMonth || p.createdAt.toISOString().slice(0, 7);
+        if (!groups[key]) groups[key] = { month: key, total: 0, payouts: [] };
+        groups[key].total += p.amount;
+        groups[key].payouts.push({ id: p.id, date: p.createdAt, reference: p.reference, amount: p.amount, status: p.status });
+      }
+      return res.json({ success: true, data: { totalPaid, history: Object.values(groups), hasPayoutDetails } });
+    }
+
+    const earnings = await prisma.riderEarning.findMany({
+      where: { riderProfileId: profile.id, status: 'PENDING' },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      include: { delivery: { select: { orderTag: true, packageName: true } } },
+    });
+    const totalPending = earnings.reduce((s, e) => s + e.amount, 0);
+    const breakdown = earnings.map((e) => ({
+      id: e.id,
+      deliveryId: e.deliveryId,
+      orderTag: e.delivery.orderTag,
+      packageName: e.delivery.packageName,
+      distanceKm: e.distanceKm,
+      amount: e.amount,
+      date: e.createdAt,
+    }));
+    res.json({ success: true, data: { totalPending, breakdown, hasPayoutDetails } });
+  })
+);
+
+// ─── PAYOUT ACCOUNT ─────────────────────────────────────
+router.get(
+  '/payout-account',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+    const account = await prisma.riderPayoutAccount.findUnique({ where: { riderProfileId: profile.id } });
+    res.json({
+      success: true,
+      data: account
+        ? { bankName: account.bankName, bankCode: account.bankCode, accountName: account.accountName, last4: account.last4, status: account.status }
+        : null,
+    });
+  })
+);
+
+// Save/verify a payout (NUBAN) account. The resolved account name must match
+// the rider's KYC full name, otherwise it's rejected (422).
+router.post(
+  '/payout-account',
+  validate(payoutAccountSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const { accountNumber, bankCode, bankName, accountName } = req.body as {
+      accountNumber: string; bankCode: string; bankName: string; accountName: string;
+    };
+
+    // Compare against the KYC name when available.
+    const verification = await prisma.riderVerification.findUnique({ where: { riderProfileId: profile.id }, select: { fullName: true } });
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+    const kyc = verification?.fullName ? norm(verification.fullName) : '';
+    const resolved = norm(accountName);
+    const nameMatches = !kyc || kyc.split('').sort().join('') === resolved.split('').sort().join('') ||
+      resolved.includes(kyc) || kyc.includes(resolved);
+
+    if (!nameMatches) {
+      return res.status(422).json({ success: false, error: 'name_mismatch', message: 'The account name does not match your verified identity.' });
+    }
+
+    const last4 = accountNumber.slice(-4);
+    const account = await prisma.riderPayoutAccount.upsert({
+      where: { riderProfileId: profile.id },
+      create: { riderProfileId: profile.id, accountNumber, bankCode, bankName, accountName, last4, status: 'VERIFIED' },
+      update: { accountNumber, bankCode, bankName, accountName, last4, status: 'VERIFIED' },
+    });
+    res.json({ success: true, data: { status: account.status, bankName: account.bankName, accountName: account.accountName, last4: account.last4 } });
   })
 );
 

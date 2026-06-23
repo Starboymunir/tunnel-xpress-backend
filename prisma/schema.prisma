@@ -156,12 +156,92 @@ model RiderProfile {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
-  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deliveries   Delivery[]        @relation("RiderDeliveries")
-  ratings      Rating[]          @relation("RatedRider")
-  verification RiderVerification?
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries    Delivery[]          @relation("RiderDeliveries")
+  ratings       Rating[]            @relation("RatedRider")
+  verification  RiderVerification?
+  earnings      RiderEarning[]
+  payouts       Payout[]
+  payoutAccount RiderPayoutAccount?
 
   @@map("rider_profiles")
+}
+
+// ─── RIDER EARNINGS / PAYOUTS ───────────────────────────
+
+enum EarningStatus {
+  PENDING
+  PAID
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
+enum PayoutAccountStatus {
+  UNVERIFIED
+  VERIFIED
+  REJECTED
+}
+
+// One ledger row per delivered order — the rider's commission for that trip.
+model RiderEarning {
+  id             String        @id @default(uuid())
+  riderProfileId String
+  deliveryId     String        @unique
+  amount         Float
+  distanceKm     Float         @default(0)
+  status         EarningStatus @default(PENDING)
+  payoutId       String?
+  createdAt      DateTime      @default(now())
+  paidAt         DateTime?
+
+  rider    RiderProfile @relation(fields: [riderProfileId], references: [id], onDelete: Cascade)
+  delivery Delivery     @relation(fields: [deliveryId], references: [id])
+  payout   Payout?      @relation(fields: [payoutId], references: [id])
+
+  @@index([riderProfileId, status])
+  @@map("rider_earnings")
+}
+
+// The rider's bank (NUBAN) destination for payouts.
+model RiderPayoutAccount {
+  id             String              @id @default(uuid())
+  riderProfileId String              @unique
+  accountNumber  String
+  bankCode       String
+  bankName       String
+  accountName    String
+  last4          String
+  status         PayoutAccountStatus @default(UNVERIFIED)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  rider RiderProfile @relation(fields: [riderProfileId], references: [id], onDelete: Cascade)
+
+  @@map("rider_payout_accounts")
+}
+
+// A settled batch of earnings paid out to the rider.
+model Payout {
+  id              String       @id @default(uuid())
+  riderProfileId  String
+  reference       String       @unique
+  amount          Float
+  status          PayoutStatus @default(PENDING)
+  payoutAccountId String?
+  periodMonth     String?
+  createdAt       DateTime     @default(now())
+  paidAt          DateTime?
+
+  rider    RiderProfile   @relation(fields: [riderProfileId], references: [id], onDelete: Cascade)
+  earnings RiderEarning[]
+
+  @@index([riderProfileId, createdAt])
+  @@map("payouts")
 }
 
 // ─── RIDER KYC / VERIFICATION ───────────────────────────
@@ -263,12 +343,17 @@ model Delivery {
   liveRiderLat     Float?
   liveRiderLng     Float?
 
+  // Hand-off verification codes (rider must enter these at pickup/dropoff)
+  pickupCode       String?
+  dropoffCode      String?
+
   // Relations
   customer  User          @relation("CustomerDeliveries", fields: [customerId], references: [id])
   rider     RiderProfile? @relation("RiderDeliveries", fields: [riderId], references: [id])
   payment   Payment?
   rating    Rating?
   coupon    Coupon?       @relation(fields: [couponId], references: [id])
+  riderEarning RiderEarning?
 
   @@index([customerId])
   @@index([riderId])
