@@ -5,7 +5,7 @@ import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate } from '../middleware/auth';
 import { validate, validateQuery } from '../middleware/validate';
 import { createDeliverySchema, rateDeliverySchema, calculateFeeSchema } from '../schemas';
-import { generateOrderTag } from '../lib/generators';
+import { generateOrderTag, generateCode } from '../lib/generators';
 import { calculateDeliveryFee, estimateDeliveryTime, haversineDistance } from '../lib/pricing';
 import { emitDeliveryMessage } from '../socket';
 import { z } from 'zod';
@@ -127,6 +127,8 @@ router.post(
         couponId,
         discountAmount,
         estimatedMinutes,
+        pickupCode: generateCode(),
+        dropoffCode: generateCode(),
       },
     });
 
@@ -326,6 +328,7 @@ router.get(
         dropoffLat: true,
         dropoffLng: true,
         dropoffAddress: true,
+        dropoffCode: true,
         liveRiderLat: true,
         liveRiderLng: true,
         estimatedMinutes: true,
@@ -348,7 +351,11 @@ router.get(
 
     if (!delivery) throw new AppError('Delivery not found', 404);
 
-    res.json({ success: true, data: delivery });
+    // The dropoff code is for the customer's eyes only (they read it to the rider).
+    const data: any = delivery;
+    if (delivery.customer?.id !== req.user!.userId) data.dropoffCode = null;
+
+    res.json({ success: true, data });
   })
 );
 

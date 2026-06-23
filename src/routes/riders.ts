@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { submitVerificationSchema, reviewVerificationSchema, payoutAccountSchema } from '../schemas';
 import { config } from '../config';
+import { generateCode } from '../lib/generators';
 import { maybeRewardReferral } from '../lib/referralReward';
 import { emitDeliveryStatus, emitNotification } from '../socket';
 
@@ -110,7 +111,14 @@ router.post(
 
     const updated = await prisma.delivery.update({
       where: { id: delivery.id },
-      data: { riderId: profile.id, status: 'RIDER_ASSIGNED', assignedAt: new Date() },
+      data: {
+        riderId: profile.id,
+        status: 'RIDER_ASSIGNED',
+        assignedAt: new Date(),
+        // Backfill hand-off codes for orders created before codes existed.
+        ...(delivery.dropoffCode ? {} : { dropoffCode: generateCode() }),
+        ...(delivery.pickupCode ? {} : { pickupCode: generateCode() }),
+      },
       select: ORDER_SELECT,
     });
 
@@ -205,6 +213,46 @@ router.post(
       DELIVERED: { title: 'Delivered', body: 'Your package has been delivered successfully.' },
     };
     if (notif[expected]) emitNotification(delivery.customerId, { type: 'ORDER', ...notif[expected] });
+
+    res.json({ success: true, data: updated });
+  })
+);
+
+// ─── VERIFY DROPOFF CODE → COMPLETE DELIVERY ────────────
+router.post(
+  '/orders/:id/verify-code',
+  asyncHandler(async (req: Request, res: Response) => {
+    const profile = await getRiderProfile(req.user!.userId);
+    if (!profile) throw new AppError('Not a rider account', 403);
+
+    const code = String(req.body?.code || '').trim();
+    const delivery = await prisma.delivery.findUnique({ where: { id: String(req.params.id) } });
+    if (!delivery) throw new AppError('Order not found', 404);
+    if (delivery.riderId !== profile.id) throw new AppError('This is not your order', 403);
+    if (delivery.status === 'DELIVERED') {
+      return res.json({ success: true, data: { id: delivery.id, status: 'DELIVERED' } });
+    }
+    if (!delivery.dropoffCode || code !== delivery.dropoffCode) {
+      throw new AppError('That code is incorrect. Ask the customer to confirm it.', 400);
+    }
+
+    const updated = await prisma.delivery.update({
+      where: { id: delivery.id },
+      data: { status: 'DELIVERED', deliveredAt: new Date(), pickedUpAt: delivery.pickedUpAt ?? new Date() },
+      select: ORDER_SELECT,
+    });
+
+    await prisma.riderProfile.update({ where: { id: profile.id }, data: { totalDeliveries: { increment: 1 } } });
+    const amount = Math.round((delivery.totalFee ?? 0) * COMMISSION_RATE);
+    await prisma.riderEarning.upsert({
+      where: { deliveryId: delivery.id },
+      create: { riderProfileId: profile.id, deliveryId: delivery.id, amount, distanceKm: delivery.distanceKm ?? 0 },
+      update: {},
+    });
+    await maybeRewardReferral(delivery.customerId);
+
+    emitDeliveryStatus(delivery.id, 'DELIVERED');
+    emitNotification(delivery.customerId, { type: 'ORDER', title: 'Delivered', body: 'Your package has been delivered successfully.' });
 
     res.json({ success: true, data: updated });
   })

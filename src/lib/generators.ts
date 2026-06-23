@@ -10,6 +10,13 @@ export async function generateOrderTag(): Promise<string> {
 }
 
 /**
+ * Generate a 4-digit hand-off verification code (pickup / dropoff).
+ */
+export function generateCode(): string {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+/**
  * Generate a referral code from user name or random
  */
 export function generateReferralCode(firstName?: string): string {
