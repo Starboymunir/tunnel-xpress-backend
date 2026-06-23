@@ -190,6 +190,11 @@ export const reviewVerificationSchema = z.object({
   reason: z.string().optional(),
 });
 
+export const rateCustomerSchema = z.object({
+  score: z.number().int().min(1).max(5),
+  comment: z.string().optional(),
+});
+
 export const payoutAccountSchema = z.object({
   accountNumber: z.string().regex(/^\d{10}$/, 'Account number must be 10 digits'),
   bankCode: z.string().min(1, 'Bank is required'),

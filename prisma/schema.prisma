@@ -100,6 +100,8 @@ model User {
   isActive      Boolean      @default(true)
   referralCode  String       @unique @default(uuid())
   referredBy    String?
+  customerRating      Float    @default(0)
+  customerRatingCount Int      @default(0)
 
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
@@ -349,6 +351,10 @@ model Delivery {
 
   // Riders who declined this request (excluded from their available list)
   declinedRiderIds String[]      @default([])
+
+  // Rider's rating of the customer for this trip
+  riderRatedScore   Int?
+  riderRatedComment String?
 
   // Relations
   customer  User          @relation("CustomerDeliveries", fields: [customerId], references: [id])
