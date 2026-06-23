@@ -10,6 +10,38 @@ const router = Router();
 
 router.use(authenticate);
 
+// ─── FAQS + SUPPORT CONFIG ──────────────────────────────
+const FAQS = [
+  { id: 'contact', question: 'How do I contact customer support?', answer: 'Tap "Live Chat" to message an agent in real time, or "Call Now" to reach our 24/7 hotline. You can also start a chat from the Support screen at any time.' },
+  { id: 'become-rider', question: 'How do I become a rider on Tunnel Express?', answer: 'Sign up, choose "Rider", then complete identity verification: personal details, a valid government ID, a selfie, your rider permit, and your vehicle details. Once approved you can go online and start accepting deliveries.' },
+  { id: 'requests', question: 'How do I get delivery requests?', answer: 'Toggle "Go Online" on your home screen. While online and verified, nearby paid orders appear in your requests. Accept one to start the trip; declining a request hides it from you.' },
+  { id: 'earn-paid', question: 'How do I earn and get paid?', answer: 'You earn a commission on every completed delivery. Earnings collect under Earnings & Payouts. Add a verified bank account, then tap "Request payout" to move your pending earnings to your bank.' },
+  { id: 'documents', question: 'What documents are required for verification?', answer: 'A valid government-issued ID (NIN, Voter\'s card, Driver\'s license, or International Passport), a clear selfie, your rider permit/licence, and your vehicle plate details.' },
+  { id: 'issue', question: 'What if there\'s an issue during a delivery?', answer: 'Use the in-app call or chat to reach the customer. If you can\'t resolve it, contact support via Live Chat or the hotline and we\'ll help right away.' },
+  { id: 'code', question: 'Why do I need a code to complete a delivery?', answer: 'At drop-off the customer gives you a unique code shown in their app. Entering it confirms the package reached the right person and releases your earning for the trip.' },
+];
+
+router.get(
+  '/faqs',
+  asyncHandler(async (_req: Request, res: Response) => {
+    res.json({ success: true, data: FAQS });
+  })
+);
+
+router.get(
+  '/config',
+  asyncHandler(async (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: {
+        phone: process.env.SUPPORT_PHONE || '+2348000000000',
+        email: process.env.SUPPORT_EMAIL || 'support@tunnel-xpress.com',
+        hours: '24/7',
+      },
+    });
+  })
+);
+
 // ─── LIST MY SUPPORT CHATS ─────────────────────────────
 
 router.get(
