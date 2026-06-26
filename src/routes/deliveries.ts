@@ -8,6 +8,7 @@ import { createDeliverySchema, rateDeliverySchema, calculateFeeSchema } from '..
 import { generateOrderTag, generateCode } from '../lib/generators';
 import { calculateDeliveryFee, estimateDeliveryTime, haversineDistance } from '../lib/pricing';
 import { emitDeliveryMessage } from '../socket';
+import { submitRating } from '../lib/ratings';
 import { z } from 'zod';
 
 const router = Router();
@@ -171,7 +172,7 @@ router.get(
               user: { select: { firstName: true, lastName: true, avatarUrl: true, phone: true } },
             },
           },
-          rating: { select: { score: true } },
+          ratings: { where: { type: 'RIDER' }, select: { score: true } },
         },
       }),
       prisma.delivery.count({ where }),
@@ -213,7 +214,7 @@ router.get(
           },
         },
         payment: { select: { id: true, status: true, method: true, amount: true } },
-        rating: true,
+        ratings: true,
         coupon: { select: { code: true, discountPercent: true, discountFlat: true } },
       },
     });
@@ -271,41 +272,14 @@ router.post(
     });
 
     if (!delivery) throw new AppError('Delivery not found', 404);
-    if (delivery.customerId !== req.user!.userId) {
-      throw new AppError('Not authorized', 403);
-    }
-    if (delivery.status !== 'DELIVERED') {
-      throw new AppError('Can only rate delivered orders', 400);
-    }
-    if (!delivery.riderId) {
-      throw new AppError('No rider to rate', 400);
-    }
 
-    // Check if already rated
-    const existingRating = await prisma.rating.findUnique({
-      where: { deliveryId: delivery.id },
-    });
-    if (existingRating) throw new AppError('Already rated', 409);
-
-    const rating = await prisma.rating.create({
-      data: {
-        deliveryId: delivery.id,
-        raterId: req.user!.userId,
-        riderId: delivery.riderId,
-        score,
-        comment,
-      },
-    });
-
-    // Update rider average rating
-    const allRatings = await prisma.rating.aggregate({
-      where: { riderId: delivery.riderId },
-      _avg: { score: true },
-    });
-
-    await prisma.riderProfile.update({
-      where: { id: delivery.riderId },
-      data: { avgRating: allRatings._avg.score ?? 0 },
+    // The customer rating their rider — unified rating pipeline.
+    const rating = await submitRating({
+      kind: 'RIDER',
+      raterId: req.user!.userId,
+      deliveryId: delivery.id,
+      score,
+      comment,
     });
 
     res.status(201).json({ success: true, data: rating });

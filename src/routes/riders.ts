@@ -8,6 +8,7 @@ import { submitVerificationSchema, reviewVerificationSchema, payoutAccountSchema
 import { config } from '../config';
 import { generateCode } from '../lib/generators';
 import { maybeRewardReferral } from '../lib/referralReward';
+import { submitRating } from '../lib/ratings';
 import { emitDeliveryStatus, emitNotification } from '../socket';
 
 const router = Router();
@@ -223,40 +224,17 @@ router.post(
   '/orders/:id/rate-customer',
   validate(rateCustomerSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const profile = await getRiderProfile(req.user!.userId);
-    if (!profile) throw new AppError('Not a rider account', 403);
-
     const { score, comment } = req.body as { score: number; comment?: string };
-    const delivery = await prisma.delivery.findUnique({
-      where: { id: String(req.params.id) },
-      select: { id: true, riderId: true, customerId: true, riderRatedScore: true },
-    });
-    if (!delivery) throw new AppError('Order not found', 404);
-    if (delivery.riderId !== profile.id) throw new AppError('This is not your order', 403);
-    if (delivery.riderRatedScore != null) {
-      return res.json({ success: true, data: { rated: true } });
-    }
-
-    await prisma.delivery.update({
-      where: { id: delivery.id },
-      data: { riderRatedScore: score, riderRatedComment: comment || null },
+    // Rider rating the customer — unified rating pipeline (auth, de-dupe, averages).
+    const rating = await submitRating({
+      kind: 'CUSTOMER',
+      raterId: req.user!.userId,
+      deliveryId: String(req.params.id),
+      score,
+      comment,
     });
 
-    // Roll the score into the customer's running average.
-    const customer = await prisma.user.findUnique({
-      where: { id: delivery.customerId },
-      select: { customerRating: true, customerRatingCount: true },
-    });
-    if (customer) {
-      const count = customer.customerRatingCount + 1;
-      const avg = (customer.customerRating * customer.customerRatingCount + score) / count;
-      await prisma.user.update({
-        where: { id: delivery.customerId },
-        data: { customerRating: Math.round(avg * 10) / 10, customerRatingCount: count },
-      });
-    }
-
-    res.json({ success: true, data: { rated: true } });
+    res.json({ success: true, data: { rated: true, id: rating.id } });
   })
 );
 

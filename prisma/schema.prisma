@@ -116,6 +116,7 @@ model User {
   referrals      Referral[]     @relation("Referrer")
   referredUsers  Referral[]     @relation("Referred")
   ratings        Rating[]       @relation("RaterUser")
+  ratingsReceived Rating[]      @relation("RatedUser")
   supportChats   SupportChat[]
   riderProfile   RiderProfile?
   wallet         Wallet?
@@ -153,6 +154,7 @@ model RiderProfile {
   lastLocationAt  DateTime?
   totalDeliveries Int               @default(0)
   avgRating       Float             @default(0)
+  ratingCount     Int               @default(0)
   isApproved      Boolean           @default(false)
   verificationStatus VerificationStatus @default(NONE)
 
@@ -361,7 +363,7 @@ model Delivery {
   customer  User          @relation("CustomerDeliveries", fields: [customerId], references: [id])
   rider     RiderProfile? @relation("RiderDeliveries", fields: [riderId], references: [id])
   payment   Payment?
-  rating    Rating?
+  ratings   Rating[]
   coupon    Coupon?       @relation(fields: [couponId], references: [id])
   riderEarning RiderEarning?
 
@@ -450,20 +452,34 @@ model Coupon {
 
 // ─── RATING ─────────────────────────────────────────────
 
+enum RatingType {
+  RIDER     // a customer rating the rider on a delivery
+  CUSTOMER  // a rider rating the customer on a delivery
+  APP       // either party rating the app experience
+}
+
 model Rating {
-  id         String @id @default(uuid())
-  deliveryId String @unique
-  raterId    String
-  riderId    String
-  score      Int    // 1-5
-  comment    String?
+  id             String     @id @default(uuid())
+  type           RatingType @default(RIDER)
+  deliveryId     String?
+  raterId        String     // who submitted the rating
+  ratedUserId    String?    // the User being rated (customer, or the rider's user)
+  riderProfileId String?    // the RiderProfile being rated (type RIDER)
+  score          Int        // 1-5
+  comment        String?
 
-  createdAt  DateTime @default(now())
+  createdAt      DateTime   @default(now())
 
-  delivery   Delivery     @relation(fields: [deliveryId], references: [id])
-  rater      User         @relation("RaterUser", fields: [raterId], references: [id])
-  rider      RiderProfile @relation("RatedRider", fields: [riderId], references: [id])
+  delivery     Delivery?     @relation(fields: [deliveryId], references: [id])
+  rater        User          @relation("RaterUser", fields: [raterId], references: [id])
+  ratedUser    User?         @relation("RatedUser", fields: [ratedUserId], references: [id])
+  riderProfile RiderProfile? @relation("RatedRider", fields: [riderProfileId], references: [id])
 
+  // One rating per (delivery, type, rater): a customer can't rate the same rider
+  // twice, but the customer + rider + app ratings for one delivery coexist.
+  @@unique([deliveryId, type, raterId])
+  @@index([riderProfileId])
+  @@index([ratedUserId])
   @@map("ratings")
 }
 

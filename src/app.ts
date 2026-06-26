@@ -19,6 +19,7 @@ import promoRoutes from './routes/promos';
 import uploadRoutes from './routes/uploads';
 import riderRoutes from './routes/riders';
 import bankRoutes from './routes/banks';
+import ratingRoutes from './routes/ratings';
 
 const app = express();
 
@@ -86,6 +87,7 @@ app.use('/api/promos', promoRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/riders', riderRoutes);
 app.use('/api/banks', bankRoutes);
+app.use('/api/ratings', ratingRoutes);
 
 // ─── ERROR HANDLING ─────────────────────────────────────
 
