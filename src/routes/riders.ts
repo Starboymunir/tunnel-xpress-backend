@@ -468,6 +468,33 @@ router.get(
     const hasPayoutDetails = !!account && account.status === 'VERIFIED';
 
     if (range === 'paid') {
+      // The design has no manual "request payout" button — payouts are scheduled.
+      // Simulate the schedule: once payout details are verified, settle any
+      // pending earnings into a payout so they appear in the paid history.
+      if (hasPayoutDetails && account) {
+        const pending = await prisma.riderEarning.findMany({
+          where: { riderProfileId: profile.id, status: 'PENDING' },
+          select: { id: true, amount: true },
+        });
+        if (pending.length > 0) {
+          const amount = pending.reduce((s, e) => s + e.amount, 0);
+          const reference = `PO-${Date.now().toString(36).toUpperCase()}`;
+          const periodMonth = new Date().toISOString().slice(0, 7);
+          const payout = await prisma.payout.create({
+            data: { riderProfileId: profile.id, reference, amount, status: 'PAID', payoutAccountId: account.id, periodMonth, paidAt: new Date() },
+          });
+          await prisma.riderEarning.updateMany({
+            where: { riderProfileId: profile.id, status: 'PENDING' },
+            data: { status: 'PAID', payoutId: payout.id, paidAt: new Date() },
+          });
+          emitNotification(req.user!.userId, {
+            type: 'PAYMENT',
+            title: 'Payout sent',
+            body: `₦${amount.toLocaleString()} has been paid to your ${account.bankName} account (${account.last4}).`,
+          });
+        }
+      }
+
       const payouts = await prisma.payout.findMany({
         where: { riderProfileId: profile.id },
         orderBy: { createdAt: 'desc' },
