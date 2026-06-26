@@ -328,6 +328,7 @@ router.get(
         dropoffLat: true,
         dropoffLng: true,
         dropoffAddress: true,
+        pickupCode: true,
         dropoffCode: true,
         liveRiderLat: true,
         liveRiderLng: true,
@@ -353,7 +354,7 @@ router.get(
 
     // The dropoff code is for the customer's eyes only (they read it to the rider).
     const data: any = delivery;
-    if (delivery.customer?.id !== req.user!.userId) data.dropoffCode = null;
+    if (delivery.customer?.id !== req.user!.userId) { data.dropoffCode = null; data.pickupCode = null; }
 
     res.json({ success: true, data });
   })

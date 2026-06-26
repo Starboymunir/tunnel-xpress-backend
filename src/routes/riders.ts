@@ -268,9 +268,30 @@ router.post(
     if (!profile) throw new AppError('Not a rider account', 403);
 
     const code = String(req.body?.code || '').trim();
+    const stage = req.body?.stage === 'pickup' ? 'pickup' : 'dropoff';
     const delivery = await prisma.delivery.findUnique({ where: { id: String(req.params.id) } });
     if (!delivery) throw new AppError('Order not found', 404);
     if (delivery.riderId !== profile.id) throw new AppError('This is not your order', 403);
+
+    // ── Pickup leg: verify the pickup code → PICKED_UP ──
+    if (stage === 'pickup') {
+      if (['PICKED_UP', 'IN_TRANSIT', 'DELIVERED'].includes(delivery.status)) {
+        return res.json({ success: true, data: { id: delivery.id, status: delivery.status } });
+      }
+      if (!delivery.pickupCode || code !== delivery.pickupCode) {
+        throw new AppError('That code is incorrect. Ask the customer to confirm it.', 400);
+      }
+      const updated = await prisma.delivery.update({
+        where: { id: delivery.id },
+        data: { status: 'PICKED_UP', pickedUpAt: new Date() },
+        select: ORDER_SELECT,
+      });
+      emitDeliveryStatus(delivery.id, 'PICKED_UP');
+      emitNotification(delivery.customerId, { type: 'ORDER', title: 'Package Picked Up', body: 'Your package has been picked up and is on its way.' });
+      return res.json({ success: true, data: updated });
+    }
+
+    // ── Dropoff leg: verify the dropoff code → DELIVERED ──
     if (delivery.status === 'DELIVERED') {
       return res.json({ success: true, data: { id: delivery.id, status: 'DELIVERED' } });
     }
