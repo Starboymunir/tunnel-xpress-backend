@@ -516,7 +516,7 @@ router.get(
       where: { riderProfileId: profile.id, status: 'PENDING' },
       orderBy: { createdAt: 'desc' },
       take: 200,
-      include: { delivery: { select: { orderTag: true, packageName: true } } },
+      include: { delivery: { select: { orderTag: true, packageName: true, pickupAddress: true, dropoffAddress: true } } },
     });
     const totalPending = earnings.reduce((s, e) => s + e.amount, 0);
     const breakdown = earnings.map((e) => ({
@@ -524,11 +524,25 @@ router.get(
       deliveryId: e.deliveryId,
       orderTag: e.delivery.orderTag,
       packageName: e.delivery.packageName,
+      pickupAddress: e.delivery.pickupAddress,
+      dropoffAddress: e.delivery.dropoffAddress,
       distanceKm: e.distanceKm,
       amount: e.amount,
       date: e.createdAt,
     }));
-    res.json({ success: true, data: { totalPending, breakdown, hasPayoutDetails } });
+
+    // Today-vs-yesterday delta for the "up/down by X% from yesterday" pill.
+    const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+    const startYest = new Date(startToday); startYest.setDate(startYest.getDate() - 1);
+    const [todayAgg, yestAgg] = await Promise.all([
+      prisma.riderEarning.aggregate({ where: { riderProfileId: profile.id, createdAt: { gte: startToday } }, _sum: { amount: true } }),
+      prisma.riderEarning.aggregate({ where: { riderProfileId: profile.id, createdAt: { gte: startYest, lt: startToday } }, _sum: { amount: true } }),
+    ]);
+    const todaySum = todayAgg._sum.amount ?? 0;
+    const yestSum = yestAgg._sum.amount ?? 0;
+    const deltaPct = yestSum > 0 ? Math.round(((todaySum - yestSum) / yestSum) * 100) : null;
+
+    res.json({ success: true, data: { totalPending, breakdown, hasPayoutDetails, deltaPct } });
   })
 );
 
