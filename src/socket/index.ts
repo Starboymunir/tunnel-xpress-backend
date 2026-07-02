@@ -7,6 +7,46 @@ import { AuthPayload } from '../middleware/auth';
 
 let io: SocketIOServer;
 
+// ─── PRESENCE ────────────────────────────────────────────
+// userId → live socket count. A user is "online" while any socket is open.
+const onlineUsers = new Map<string, number>();
+const onlineRoles = new Map<string, string>();
+
+export function isUserOnline(userId: string): boolean {
+  return (onlineUsers.get(userId) ?? 0) > 0;
+}
+
+export function isAnyAdminOnline(): boolean {
+  for (const [id, count] of onlineUsers) {
+    if (count > 0 && onlineRoles.get(id) === 'ADMIN') return true;
+  }
+  return false;
+}
+
+/** True when any of the user's sockets has joined the given room. */
+export function isUserInRoom(userId: string, room: string): boolean {
+  if (!io) return false;
+  const ids = io.sockets.adapter.rooms.get(room);
+  if (!ids) return false;
+  for (const sid of ids) {
+    const s = io.sockets.sockets.get(sid);
+    if (s?.data?.user?.userId === userId) return true;
+  }
+  return false;
+}
+
+/** True when any connected admin has joined the given room. */
+export function isAnyAdminInRoom(room: string): boolean {
+  if (!io) return false;
+  const ids = io.sockets.adapter.rooms.get(room);
+  if (!ids) return false;
+  for (const sid of ids) {
+    const s = io.sockets.sockets.get(sid);
+    if (s?.data?.user?.role === 'ADMIN') return true;
+  }
+  return false;
+}
+
 export function initializeSocketIO(httpServer: HttpServer) {
   io = new SocketIOServer(httpServer, {
     cors: {
@@ -47,7 +87,20 @@ export function initializeSocketIO(httpServer: HttpServer) {
     // Riders also join a shared room so new orders can be broadcast to them
     if (role === 'RIDER') socket.join('riders');
 
+    // Presence: mark online (first socket) and broadcast.
+    const prev = onlineUsers.get(userId) ?? 0;
+    onlineUsers.set(userId, prev + 1);
+    onlineRoles.set(userId, role);
+    if (prev === 0) io.emit('presence:update', { userId, online: true, role });
+
     console.log(`[Socket] ${role} ${userId} connected`);
+
+    // Presence query: cb receives { online: string[], adminsOnline: boolean }.
+    // Accepts user ids; the sentinel 'ADMINS' asks whether any admin is connected.
+    socket.on('presence:query', (userIds: string[], cb?: (res: { online: string[]; adminsOnline: boolean }) => void) => {
+      const ids = Array.isArray(userIds) ? userIds : [];
+      cb?.({ online: ids.filter((id) => isUserOnline(id)), adminsOnline: isAnyAdminOnline() });
+    });
 
     // ─── CUSTOMER: Subscribe to delivery tracking ─────
     socket.on('delivery:subscribe', (deliveryId: string) => {
@@ -62,6 +115,25 @@ export function initializeSocketIO(httpServer: HttpServer) {
     // Relay typing indicator to the other party in the delivery room.
     socket.on('delivery:typing', (deliveryId: string) => {
       socket.to(`delivery:${deliveryId}`).emit('delivery:typing', { deliveryId, userId });
+    });
+
+    // ─── SUPPORT CHAT ROOMS ───────────────────────────
+    // Only the chat owner or an admin may join a support room.
+    socket.on('support:subscribe', async (chatId: string) => {
+      try {
+        const chat = await prisma.supportChat.findUnique({ where: { id: String(chatId) }, select: { userId: true } });
+        if (!chat) return;
+        if (chat.userId !== userId && role !== 'ADMIN') return;
+        socket.join(`support:${chatId}`);
+      } catch {}
+    });
+
+    socket.on('support:unsubscribe', (chatId: string) => {
+      socket.leave(`support:${chatId}`);
+    });
+
+    socket.on('support:typing', (chatId: string) => {
+      socket.to(`support:${chatId}`).emit('support:typing', { chatId, userId, isAgent: role === 'ADMIN' });
     });
 
     // ─── RIDER: Update live location ─────────────────
@@ -239,6 +311,13 @@ export function initializeSocketIO(httpServer: HttpServer) {
 
     // ─── DISCONNECT ──────────────────────────────────
     socket.on('disconnect', () => {
+      const count = (onlineUsers.get(userId) ?? 1) - 1;
+      if (count <= 0) {
+        onlineUsers.delete(userId);
+        io.emit('presence:update', { userId, online: false, role });
+      } else {
+        onlineUsers.set(userId, count);
+      }
       console.log(`[Socket] ${role} ${userId} disconnected`);
     });
   });
@@ -267,6 +346,13 @@ export async function emitDeliveryStatus(deliveryId: string, status: string, ext
 export function emitDeliveryMessage(deliveryId: string, message: any) {
   if (!io) return;
   io.to(`delivery:${deliveryId}`).emit('delivery:message', message);
+}
+
+// ─── HELPER: Emit a new chat message to a support room ──
+
+export function emitSupportMessage(chatId: string, message: any) {
+  if (!io) return;
+  io.to(`support:${chatId}`).emit('support:message', message);
 }
 
 // ─── HELPER: Broadcast to all connected riders ──────────

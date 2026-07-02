@@ -3,7 +3,7 @@ import prisma from '../lib/prisma';
 import { AppError } from '../lib/errors';
 import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate, requireRole } from '../middleware/auth';
-import { emitDeliveryStatus, emitNotification } from '../socket';
+import { emitDeliveryStatus, emitNotification, emitSupportMessage, isUserInRoom } from '../socket';
 
 const router = Router();
 router.use(authenticate, requireRole('ADMIN'));
@@ -555,6 +555,74 @@ router.get(
         })),
       },
     });
+  })
+);
+
+// ─── SUPPORT CHAT (admin ↔ customer / rider) ─────────────
+router.get(
+  '/support/:id/messages',
+  asyncHandler(async (req: Request, res: Response) => {
+    const chat = await prisma.supportChat.findUnique({
+      where: { id: String(req.params.id) },
+      include: { user: { select: { id: true, firstName: true, lastName: true, role: true } } },
+    });
+    if (!chat) throw new AppError('Ticket not found', 404);
+
+    const messages = await prisma.supportMessage.findMany({
+      where: { chatId: chat.id },
+      orderBy: { createdAt: 'asc' },
+      take: 300,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        chat: {
+          id: chat.id,
+          subject: chat.subject,
+          status: chat.status,
+          user: { id: chat.user.id, name: fullName(chat.user), role: chat.user.role },
+        },
+        messages,
+      },
+    });
+  })
+);
+
+router.post(
+  '/support/:id/messages',
+  asyncHandler(async (req: Request, res: Response) => {
+    const content = (req.body?.content ?? '').toString().trim();
+    if (!content) throw new AppError('Message cannot be empty', 400);
+
+    const chat = await prisma.supportChat.findUnique({ where: { id: String(req.params.id) } });
+    if (!chat) throw new AppError('Ticket not found', 404);
+    if (chat.status === 'CLOSED') throw new AppError('This chat has been closed', 400);
+
+    const message = await prisma.supportMessage.create({
+      data: { chatId: chat.id, senderId: req.user!.userId, content, isAgent: true },
+    });
+    await prisma.supportChat.update({
+      where: { id: chat.id },
+      data: { status: chat.status === 'OPEN' ? 'IN_PROGRESS' : chat.status, updatedAt: new Date() },
+    });
+
+    emitSupportMessage(chat.id, message);
+    // Notify the user unless they already have the chat open.
+    if (!isUserInRoom(chat.userId, `support:${chat.id}`)) {
+      const preview = content.length > 80 ? `${content.slice(0, 77)}…` : content;
+      emitNotification(chat.userId, {
+        type: 'SYSTEM',
+        title: 'Support replied',
+        body: preview,
+        data: {
+          chatId: chat.id,
+          action: { label: 'Open chat', variant: 'purple', route: `/support/chat?chatId=${chat.id}` },
+        },
+      }).catch(() => {});
+    }
+
+    res.status(201).json({ success: true, data: message });
   })
 );
 

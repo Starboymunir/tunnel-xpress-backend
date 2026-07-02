@@ -5,7 +5,7 @@ import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { createChatSchema, sendMessageSchema } from '../schemas';
-import { notifyAdmins } from '../socket';
+import { emitSupportMessage, isAnyAdminInRoom, notifyAdmins } from '../socket';
 
 const router = Router();
 
@@ -149,6 +149,17 @@ router.post(
       where: { id: req.params.chatId as string },
       data: { updatedAt: new Date() },
     });
+
+    emitSupportMessage(req.params.chatId as string, message);
+    // Alert admins only when nobody from support is already in the chat.
+    if (!isAnyAdminInRoom(`support:${chat.id}`)) {
+      notifyAdmins({
+        type: 'SYSTEM',
+        title: 'New support message',
+        body: `${chat.subject}: ${String(req.body.content).slice(0, 80)}`,
+        data: { chatId: chat.id },
+      }).catch(() => {});
+    }
 
     res.status(201).json({ success: true, data: message });
   })

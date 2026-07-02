@@ -7,7 +7,7 @@ import { validate, validateQuery } from '../middleware/validate';
 import { createDeliverySchema, rateDeliverySchema, calculateFeeSchema } from '../schemas';
 import { generateOrderTag, generateCode } from '../lib/generators';
 import { calculateDeliveryFee, estimateDeliveryTime, haversineDistance } from '../lib/pricing';
-import { emitDeliveryMessage } from '../socket';
+import { emitDeliveryMessage, emitNotification, isUserInRoom } from '../socket';
 import { submitRating } from '../lib/ratings';
 import { z } from 'zod';
 
@@ -337,22 +337,25 @@ router.get(
 // ─── DELIVERY CHAT (customer ↔ assigned rider) ──────────
 
 /** Returns the sender role if the user is a party to this delivery, else null. */
-async function chatRoleFor(deliveryId: string, userId: string): Promise<'CUSTOMER' | 'RIDER' | null> {
+async function chatRoleFor(
+  deliveryId: string,
+  userId: string
+): Promise<{ role: 'CUSTOMER' | 'RIDER'; peerUserId: string | null } | null> {
   const delivery = await prisma.delivery.findUnique({
     where: { id: deliveryId },
     select: { customerId: true, rider: { select: { userId: true } } },
   });
   if (!delivery) return null;
-  if (delivery.customerId === userId) return 'CUSTOMER';
-  if (delivery.rider?.userId === userId) return 'RIDER';
+  if (delivery.customerId === userId) return { role: 'CUSTOMER', peerUserId: delivery.rider?.userId ?? null };
+  if (delivery.rider?.userId === userId) return { role: 'RIDER', peerUserId: delivery.customerId };
   return null;
 }
 
 router.get(
   '/:id/messages',
   asyncHandler(async (req: Request, res: Response) => {
-    const role = await chatRoleFor(req.params.id as string, req.user!.userId);
-    if (!role) throw new AppError('You are not part of this delivery', 403);
+    const party = await chatRoleFor(req.params.id as string, req.user!.userId);
+    if (!party) throw new AppError('You are not part of this delivery', 403);
 
     const messages = await prisma.deliveryMessage.findMany({
       where: { deliveryId: req.params.id as string },
@@ -367,17 +370,32 @@ router.get(
 router.post(
   '/:id/messages',
   asyncHandler(async (req: Request, res: Response) => {
-    const role = await chatRoleFor(req.params.id as string, req.user!.userId);
-    if (!role) throw new AppError('You are not part of this delivery', 403);
+    const deliveryId = req.params.id as string;
+    const party = await chatRoleFor(deliveryId, req.user!.userId);
+    if (!party) throw new AppError('You are not part of this delivery', 403);
 
     const content = (req.body?.content ?? '').toString().trim();
     if (!content) throw new AppError('Message cannot be empty', 400);
 
     const message = await prisma.deliveryMessage.create({
-      data: { deliveryId: req.params.id as string, senderId: req.user!.userId, senderRole: role, content },
+      data: { deliveryId, senderId: req.user!.userId, senderRole: party.role, content },
     });
 
-    emitDeliveryMessage(req.params.id as string, message);
+    emitDeliveryMessage(deliveryId, message);
+
+    // Notify the other party unless they already have the chat open.
+    if (party.peerUserId && !isUserInRoom(party.peerUserId, `delivery:${deliveryId}`)) {
+      const preview = content.length > 80 ? `${content.slice(0, 77)}…` : content;
+      emitNotification(party.peerUserId, {
+        type: party.role === 'RIDER' ? 'RIDER' : 'ORDER',
+        title: party.role === 'RIDER' ? 'Message from your rider' : 'Message from your customer',
+        body: preview,
+        data: {
+          deliveryId,
+          action: { label: 'Reply', variant: 'purple', route: `/delivery/chat?id=${deliveryId}` },
+        },
+      }).catch(() => {});
+    }
 
     res.status(201).json({ success: true, data: message });
   })
