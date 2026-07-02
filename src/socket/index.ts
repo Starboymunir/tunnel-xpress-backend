@@ -301,6 +301,14 @@ export async function emitNotification(userId: string, notification: {
   io.to(`user:${userId}`).emit('notification', saved ?? notification);
 }
 
+// ─── HELPER: notify every admin (persists + real-time) ──
+export async function notifyAdmins(notification: { type: string; title: string; body: string; data?: any }) {
+  try {
+    const admins = await prisma.user.findMany({ where: { role: 'ADMIN', isActive: true }, select: { id: true } });
+    for (const a of admins) await emitNotification(a.id, notification);
+  } catch {}
+}
+
 // ─── RIDER MATCHING: notify available riders of a new job ───────
 // Persists a notification per eligible rider (so it shows in the bell + list)
 // AND emits it in real time. Riders without a known location still get notified;
@@ -345,4 +353,12 @@ export async function notifyRidersOfNewDelivery(deliveryId: string) {
       },
     });
   }
+
+  // The admin console also needs to know a paid order is waiting for a rider.
+  await notifyAdmins({
+    type: 'ORDER',
+    title: 'New Order Created',
+    body: `${delivery.orderTag} · ₦${fee} · ${delivery.pickupAddress} → ${delivery.dropoffAddress} needs a rider.`,
+    data: { deliveryId: delivery.id },
+  });
 }

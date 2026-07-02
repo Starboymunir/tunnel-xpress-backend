@@ -291,7 +291,7 @@ router.get(
         orderBy: { createdAt: 'desc' },
         take: 50,
         include: {
-          user: { select: { firstName: true, lastName: true, email: true, phone: true } },
+          user: { select: { firstName: true, lastName: true, email: true, phone: true, isActive: true } },
           earnings: { select: { amount: true } },
         },
       }),
@@ -311,9 +311,90 @@ router.get(
           rating: r.avgRating,
           earnings: r.earnings.reduce((s, e) => s + e.amount, 0),
           verified: r.verificationStatus === 'APPROVED' || r.isApproved,
+          active: r.user.isActive,
         })),
       },
     });
+  })
+);
+
+// ─── RIDER MANAGEMENT (PDR: approve / suspend) ───────────
+router.patch(
+  '/riders/:id/approve',
+  asyncHandler(async (req: Request, res: Response) => {
+    const rider = await prisma.riderProfile.findUnique({ where: { id: String(req.params.id) } });
+    if (!rider) throw new AppError('Rider not found', 404);
+
+    await prisma.riderProfile.update({
+      where: { id: rider.id },
+      data: { isApproved: true, verificationStatus: 'APPROVED' },
+    });
+    emitNotification(rider.userId, {
+      type: 'SYSTEM',
+      title: 'Verification approved',
+      body: 'Your rider account has been approved. Go online to start receiving deliveries!',
+    });
+    res.json({ success: true, data: { id: rider.id, verified: true } });
+  })
+);
+
+router.patch(
+  '/riders/:id/suspend',
+  asyncHandler(async (req: Request, res: Response) => {
+    const suspend = req.body?.suspend !== false; // default: suspend
+    const rider = await prisma.riderProfile.findUnique({ where: { id: String(req.params.id) } });
+    if (!rider) throw new AppError('Rider not found', 404);
+
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: rider.userId }, data: { isActive: !suspend } }),
+      // A suspended rider must not appear available for jobs.
+      ...(suspend
+        ? [prisma.riderProfile.update({ where: { id: rider.id }, data: { availability: 'OFFLINE' } })]
+        : []),
+    ]);
+    emitNotification(rider.userId, {
+      type: 'SYSTEM',
+      title: suspend ? 'Account suspended' : 'Account reactivated',
+      body: suspend
+        ? 'Your rider account has been suspended. Contact support for more information.'
+        : 'Your rider account has been reactivated. Welcome back!',
+    });
+    res.json({ success: true, data: { id: rider.id, active: !suspend } });
+  })
+);
+
+// ─── ORDER INTERVENTION (PDR: resolve issues) ────────────
+router.patch(
+  '/orders/:id/cancel',
+  asyncHandler(async (req: Request, res: Response) => {
+    const delivery = await prisma.delivery.findUnique({
+      where: { id: String(req.params.id) },
+      include: { rider: { select: { userId: true } } },
+    });
+    if (!delivery) throw new AppError('Order not found', 404);
+    if (['DELIVERED', 'CANCELLED', 'FAILED'].includes(delivery.status)) {
+      throw new AppError('This order can no longer be canceled', 400);
+    }
+
+    await prisma.delivery.update({
+      where: { id: delivery.id },
+      data: { status: 'CANCELLED', cancelledAt: new Date() },
+    });
+
+    emitDeliveryStatus(delivery.id, 'CANCELLED');
+    emitNotification(delivery.customerId, {
+      type: 'ORDER',
+      title: 'Order canceled',
+      body: `Your order ${delivery.orderTag} was canceled by support. Contact us if you weren't expecting this.`,
+    });
+    if (delivery.rider?.userId) {
+      emitNotification(delivery.rider.userId, {
+        type: 'ORDER',
+        title: 'Order canceled',
+        body: `Order ${delivery.orderTag} has been canceled by support.`,
+      });
+    }
+    res.json({ success: true, data: { id: delivery.id, status: 'CANCELLED' } });
   })
 );
 

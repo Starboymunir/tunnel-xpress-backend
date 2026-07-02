@@ -5,6 +5,7 @@ import { asyncHandler } from '../lib/asyncHandler';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { createChatSchema, sendMessageSchema } from '../schemas';
+import { notifyAdmins } from '../socket';
 
 const router = Router();
 
@@ -87,6 +88,13 @@ router.post(
         messages: true,
       },
     });
+
+    notifyAdmins({
+      type: 'SYSTEM',
+      title: 'New Support Ticket',
+      body: 'A new support ticket has been created and needs attention.',
+      data: { chatId: chat.id },
+    }).catch(() => {});
 
     res.status(201).json({ success: true, data: chat });
   })

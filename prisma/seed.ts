@@ -71,10 +71,8 @@ async function main() {
         create: {
           vehicleType: 'BIKE',
           plateNumber: 'LAG-123-XY',
-          vehicleColor: 'Matte Black',
           availability: 'ONLINE',
           isApproved: true,
-          verificationStatus: 'APPROVED',
           currentLat: 6.5244,
           currentLng: 3.3792,
           avgRating: 4.5,
@@ -107,10 +105,8 @@ async function main() {
         create: {
           vehicleType: 'CAR',
           plateNumber: 'LAG-456-AB',
-          vehicleColor: 'Silver',
           availability: 'ONLINE',
           isApproved: true,
-          verificationStatus: 'APPROVED',
           currentLat: 6.4541,
           currentLng: 3.3947,
           avgRating: 4.8,
@@ -120,15 +116,6 @@ async function main() {
     },
   });
   console.log(`  ✓ Rider 2: ${rider2.email}`);
-
-  // Ensure both riders are approved + online even if their accounts already
-  // existed (the user upserts above use an empty `update`, so pre-existing
-  // rows would otherwise keep their old verification status).
-  await prisma.riderProfile.updateMany({
-    where: { userId: { in: [rider.id, rider2.id] } },
-    data: { verificationStatus: 'APPROVED', isApproved: true, availability: 'ONLINE' },
-  });
-  console.log('  ✓ Riders set to APPROVED + ONLINE');
 
   // ─── PROMO BANNERS ──────────────────────────────────
   await prisma.promoBanner.createMany({

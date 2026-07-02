@@ -9,7 +9,7 @@ import { config } from '../config';
 import { generateCode } from '../lib/generators';
 import { maybeRewardReferral } from '../lib/referralReward';
 import { submitRating } from '../lib/ratings';
-import { emitDeliveryStatus, emitNotification } from '../socket';
+import { emitDeliveryStatus, emitNotification, notifyAdmins } from '../socket';
 
 const router = Router();
 
@@ -129,6 +129,12 @@ router.post(
       title: 'Rider Assigned',
       body: 'A rider has accepted your order and is on the way to pick it up.',
     });
+    notifyAdmins({
+      type: 'RIDER',
+      title: 'Rider Assigned',
+      body: `A rider has been assigned to Order ${delivery.orderTag}`,
+      data: { deliveryId: delivery.id },
+    }).catch(() => {});
 
     res.json({ success: true, data: updated });
   })
