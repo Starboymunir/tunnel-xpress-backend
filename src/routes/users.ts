@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma';
 import { AppError } from '../lib/errors';
 import { asyncHandler } from '../lib/asyncHandler';
@@ -10,6 +11,27 @@ const router = Router();
 
 // All routes require authentication
 router.use(authenticate);
+
+// ─── CHANGE PASSWORD ────────────────────────────────────
+router.patch(
+  '/password',
+  asyncHandler(async (req: Request, res: Response) => {
+    const currentPassword = String(req.body?.currentPassword ?? '');
+    const newPassword = String(req.body?.newPassword ?? '');
+    if (newPassword.length < 8) throw new AppError('New password must be at least 8 characters', 400);
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId }, select: { passwordHash: true } });
+    if (!user?.passwordHash) throw new AppError('This account has no password set', 400);
+    const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!ok) throw new AppError('Current password is incorrect', 401);
+
+    await prisma.user.update({
+      where: { id: req.user!.userId },
+      data: { passwordHash: await bcrypt.hash(newPassword, 12) },
+    });
+    res.json({ success: true, message: 'Password updated' });
+  })
+);
 
 // ─── GET PROFILE ────────────────────────────────────────
 

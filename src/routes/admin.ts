@@ -37,36 +37,54 @@ async function countByDay(where: object): Promise<{ today: number; yesterday: nu
 // ─── PERIOD BUCKETS ──────────────────────────────────────
 // Stat cards let the admin switch Daily / Weekly / Monthly / All-time.
 // Each bucket carries its value and a % delta vs the preceding window.
-type StatVal = { value: number; deltaPct: number | null };
+type StatVal = { value: number; deltaPct: number | null; spark: number[] };
 export type StatBuckets = { daily: StatVal; weekly: StatVal; monthly: StatVal; all: StatVal };
 
 /**
  * Bucket rows (each with a timestamp and an optional amount) into
- * daily/weekly/monthly windows with deltas. `rows` must cover at least the
- * last 60 days; `allValue` is the all-time value (count or sum).
+ * daily/weekly/monthly windows with deltas plus a mini trend series
+ * (`spark`) for the stat-card graphs. `rows` must cover at least the last
+ * ~6 months; `allValue` is the all-time value (count or sum).
  */
 function bucketize(rows: { at: Date; amount?: number }[], allValue: number): StatBuckets {
-  const windows: [keyof StatBuckets, Date, Date, Date][] = [
-    ['daily', dayStart(0), dayStart(-1), dayStart(0)],
-    ['weekly', dayStart(-6), dayStart(-13), dayStart(-6)],
-    ['monthly', dayStart(-29), dayStart(-59), dayStart(-29)],
+  const FUTURE = new Date(8640000000000000);
+  const sumBetween = (from: Date, to: Date) => {
+    let s = 0;
+    for (const r of rows) if (r.at >= from && r.at < to) s += r.amount ?? 1;
+    return Math.round(s);
+  };
+  const series = (starts: Date[]) =>
+    starts.map((s, i) => sumBetween(s, i + 1 < starts.length ? starts[i + 1] : FUTURE));
+
+  const sparkDaily = series(Array.from({ length: 7 }, (_, i) => dayStart(-(6 - i))));
+  const sparkWeekly = series(Array.from({ length: 8 }, (_, i) => dayStart(-7 * (7 - i) - 6)));
+  const sparkMonthly = series(
+    Array.from({ length: 6 }, (_, i) => {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(1);
+      d.setMonth(d.getMonth() - (5 - i));
+      return d;
+    })
+  );
+
+  const windows: [keyof StatBuckets, Date, Date, Date, number[]][] = [
+    ['daily', dayStart(0), dayStart(-1), dayStart(0), sparkDaily],
+    ['weekly', dayStart(-6), dayStart(-13), dayStart(-6), sparkWeekly],
+    ['monthly', dayStart(-29), dayStart(-59), dayStart(-29), sparkMonthly],
   ];
   const out = {} as StatBuckets;
-  for (const [key, from, prevFrom, prevTo] of windows) {
-    let cur = 0;
-    let prev = 0;
-    for (const r of rows) {
-      const v = r.amount ?? 1;
-      if (r.at >= from) cur += v;
-      else if (r.at >= prevFrom && r.at < prevTo) prev += v;
-    }
-    out[key] = { value: Math.round(cur), deltaPct: delta(cur, prev) };
+  for (const [key, from, prevFrom, prevTo, spark] of windows) {
+    const cur = sumBetween(from, FUTURE);
+    const prev = sumBetween(prevFrom, prevTo);
+    out[key] = { value: cur, deltaPct: delta(cur, prev), spark };
   }
-  out.all = { value: Math.round(allValue), deltaPct: null };
+  out.all = { value: Math.round(allValue), deltaPct: null, spark: sparkMonthly };
   return out;
 }
 
-const SIXTY_DAYS_AGO = () => dayStart(-59);
+// Rows window: long enough for the 6-month spark series.
+const SIXTY_DAYS_AGO = () => dayStart(-183);
 
 const fullName = (u: { firstName: string | null; lastName: string | null } | null | undefined) =>
   [u?.firstName, u?.lastName].filter(Boolean).join(' ') || '—';
