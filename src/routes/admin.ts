@@ -34,6 +34,40 @@ async function countByDay(where: object): Promise<{ today: number; yesterday: nu
   return { today, yesterday };
 }
 
+// ─── PERIOD BUCKETS ──────────────────────────────────────
+// Stat cards let the admin switch Daily / Weekly / Monthly / All-time.
+// Each bucket carries its value and a % delta vs the preceding window.
+type StatVal = { value: number; deltaPct: number | null };
+export type StatBuckets = { daily: StatVal; weekly: StatVal; monthly: StatVal; all: StatVal };
+
+/**
+ * Bucket rows (each with a timestamp and an optional amount) into
+ * daily/weekly/monthly windows with deltas. `rows` must cover at least the
+ * last 60 days; `allValue` is the all-time value (count or sum).
+ */
+function bucketize(rows: { at: Date; amount?: number }[], allValue: number): StatBuckets {
+  const windows: [keyof StatBuckets, Date, Date, Date][] = [
+    ['daily', dayStart(0), dayStart(-1), dayStart(0)],
+    ['weekly', dayStart(-6), dayStart(-13), dayStart(-6)],
+    ['monthly', dayStart(-29), dayStart(-59), dayStart(-29)],
+  ];
+  const out = {} as StatBuckets;
+  for (const [key, from, prevFrom, prevTo] of windows) {
+    let cur = 0;
+    let prev = 0;
+    for (const r of rows) {
+      const v = r.amount ?? 1;
+      if (r.at >= from) cur += v;
+      else if (r.at >= prevFrom && r.at < prevTo) prev += v;
+    }
+    out[key] = { value: Math.round(cur), deltaPct: delta(cur, prev) };
+  }
+  out.all = { value: Math.round(allValue), deltaPct: null };
+  return out;
+}
+
+const SIXTY_DAYS_AGO = () => dayStart(-59);
+
 const fullName = (u: { firstName: string | null; lastName: string | null } | null | undefined) =>
   [u?.firstName, u?.lastName].filter(Boolean).join(' ') || '—';
 
@@ -194,13 +228,15 @@ router.post(
 router.get(
   '/orders',
   asyncHandler(async (_req: Request, res: Response) => {
-    const [total, active, completed, canceled, tToday, tYest, list] = await Promise.all([
+    const [total, active, completed, canceled, recent, list] = await Promise.all([
       prisma.delivery.count(),
       prisma.delivery.count({ where: { status: { in: [...ACTIVE_STATUSES] } } }),
       prisma.delivery.count({ where: { status: 'DELIVERED' } }),
       prisma.delivery.count({ where: { status: { in: ['CANCELLED', 'FAILED'] } } }),
-      prisma.delivery.count({ where: { createdAt: { gte: dayStart() } } }),
-      prisma.delivery.count({ where: { createdAt: { gte: dayStart(-1), lt: dayStart() } } }),
+      prisma.delivery.findMany({
+        where: { createdAt: { gte: SIXTY_DAYS_AGO() }, status: { notIn: ['DRAFT', 'PENDING_PAYMENT'] } },
+        select: { createdAt: true, status: true },
+      }),
       prisma.delivery.findMany({
         where: { status: { notIn: ['DRAFT', 'PENDING_PAYMENT'] } },
         orderBy: { createdAt: 'desc' },
@@ -212,10 +248,18 @@ router.get(
       }),
     ]);
 
+    const rows = (filter: (s: string) => boolean) =>
+      recent.filter((d) => filter(d.status)).map((d) => ({ at: d.createdAt }));
+
     res.json({
       success: true,
       data: {
-        stats: { total, active, completed, canceled, deltaPct: delta(tToday, tYest) },
+        stats: {
+          total: bucketize(rows(() => true), total),
+          active: bucketize(rows((s) => (ACTIVE_STATUSES as readonly string[]).includes(s)), active),
+          completed: bucketize(rows((s) => s === 'DELIVERED'), completed),
+          canceled: bucketize(rows((s) => s === 'CANCELLED' || s === 'FAILED'), canceled),
+        },
         orders: list.map((d) => ({
           id: d.id,
           orderTag: d.orderTag,
@@ -239,8 +283,12 @@ router.get(
   '/customers',
   asyncHandler(async (_req: Request, res: Response) => {
     const monthAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-    const [total, activeIds, customers] = await Promise.all([
+    const [total, signups, activeIds, customers] = await Promise.all([
       prisma.user.count({ where: { role: 'CUSTOMER' } }),
+      prisma.user.findMany({
+        where: { role: 'CUSTOMER', createdAt: { gte: SIXTY_DAYS_AGO() } },
+        select: { createdAt: true },
+      }),
       prisma.delivery.groupBy({
         by: ['customerId'],
         where: { createdAt: { gte: monthAgo } },
@@ -263,7 +311,11 @@ router.get(
     res.json({
       success: true,
       data: {
-        stats: { total, active, inactive: Math.max(0, total - active) },
+        stats: {
+          total: bucketize(signups.map((u) => ({ at: u.createdAt })), total),
+          active,
+          inactive: Math.max(0, total - active),
+        },
         customers: customers.map((c) => ({
           id: c.id,
           name: fullName(c),
@@ -282,8 +334,9 @@ router.get(
 router.get(
   '/riders',
   asyncHandler(async (_req: Request, res: Response) => {
-    const [total, online, offline, busy, riders] = await Promise.all([
+    const [total, signups, online, offline, busy, riders] = await Promise.all([
       prisma.riderProfile.count(),
+      prisma.riderProfile.findMany({ where: { createdAt: { gte: SIXTY_DAYS_AGO() } }, select: { createdAt: true } }),
       prisma.riderProfile.count({ where: { availability: 'ONLINE' } }),
       prisma.riderProfile.count({ where: { availability: 'OFFLINE' } }),
       prisma.riderProfile.count({ where: { availability: 'BUSY' } }),
@@ -300,7 +353,12 @@ router.get(
     res.json({
       success: true,
       data: {
-        stats: { total, online, offline, busy },
+        stats: {
+          total: bucketize(signups.map((r) => ({ at: r.createdAt })), total),
+          online,
+          offline,
+          busy,
+        },
         riders: riders.map((r) => ({
           id: r.id,
           name: fullName(r.user),
@@ -402,8 +460,12 @@ router.patch(
 router.get(
   '/revenue',
   asyncHandler(async (_req: Request, res: Response) => {
-    const [agg, pendingEarnings, list] = await Promise.all([
+    const [agg, recentDelivered, pendingEarnings, list] = await Promise.all([
       prisma.delivery.aggregate({ where: { status: 'DELIVERED' }, _sum: { totalFee: true } }),
+      prisma.delivery.findMany({
+        where: { status: 'DELIVERED', deliveredAt: { gte: SIXTY_DAYS_AGO() } },
+        select: { deliveredAt: true, totalFee: true },
+      }),
       prisma.riderEarning.aggregate({ where: { status: 'PENDING' }, _sum: { amount: true } }),
       prisma.delivery.findMany({
         where: { status: 'DELIVERED' },
@@ -418,14 +480,16 @@ router.get(
 
     const totalRevenue = agg._sum.totalFee || 0;
     const platformFees = Math.round(totalRevenue * (1 - COMMISSION_RATE));
+    const revRows = recentDelivered.map((d) => ({ at: d.deliveredAt as Date, amount: d.totalFee || 0 }));
+    const feeRows = recentDelivered.map((d) => ({ at: d.deliveredAt as Date, amount: (d.totalFee || 0) * (1 - COMMISSION_RATE) }));
 
     res.json({
       success: true,
       data: {
         stats: {
-          totalRevenue,
-          platformFees,
-          netRevenue: platformFees,
+          totalRevenue: bucketize(revRows, totalRevenue),
+          platformFees: bucketize(feeRows, platformFees),
+          netRevenue: bucketize(feeRows, platformFees),
           pendingPayouts: pendingEarnings._sum.amount || 0,
         },
         rows: list.map((d) => ({
@@ -448,11 +512,12 @@ router.get(
 router.get(
   '/payouts',
   asyncHandler(async (_req: Request, res: Response) => {
-    const [total, paid, pending, failed, list] = await Promise.all([
+    const [total, paid, pending, failed, recent, list] = await Promise.all([
       prisma.payout.count(),
       prisma.payout.count({ where: { status: 'PAID' } }),
       prisma.payout.count({ where: { status: { in: ['PENDING', 'PROCESSING'] } } }),
       prisma.payout.count({ where: { status: 'FAILED' } }),
+      prisma.payout.findMany({ where: { createdAt: { gte: SIXTY_DAYS_AGO() } }, select: { createdAt: true, status: true } }),
       prisma.payout.findMany({
         orderBy: { createdAt: 'desc' },
         take: 50,
@@ -467,10 +532,16 @@ router.get(
       }),
     ]);
 
+    const rows = (f: (s: string) => boolean) => recent.filter((p) => f(p.status)).map((p) => ({ at: p.createdAt }));
     res.json({
       success: true,
       data: {
-        stats: { total, paid, pending, failed },
+        stats: {
+          total: bucketize(rows(() => true), total),
+          paid: bucketize(rows((s) => s === 'PAID'), paid),
+          pending: bucketize(rows((s) => s === 'PENDING' || s === 'PROCESSING'), pending),
+          failed: bucketize(rows((s) => s === 'FAILED'), failed),
+        },
         payouts: list.map((p) => ({
           id: p.id,
           rider: fullName(p.rider.user),
@@ -489,10 +560,11 @@ router.get(
 router.get(
   '/referrals',
   asyncHandler(async (_req: Request, res: Response) => {
-    const [total, claimed, pending, list] = await Promise.all([
+    const [total, claimed, pending, recent, list] = await Promise.all([
       prisma.referral.count(),
       prisma.referral.count({ where: { isPaid: true } }),
       prisma.referral.count({ where: { isPaid: false } }),
+      prisma.referral.findMany({ where: { createdAt: { gte: SIXTY_DAYS_AGO() } }, select: { createdAt: true, isPaid: true } }),
       prisma.referral.findMany({
         orderBy: { createdAt: 'desc' },
         take: 50,
@@ -506,7 +578,11 @@ router.get(
     res.json({
       success: true,
       data: {
-        stats: { total, claimed, pending },
+        stats: {
+          total: bucketize(recent.map((r) => ({ at: r.createdAt })), total),
+          claimed: bucketize(recent.filter((r) => r.isPaid).map((r) => ({ at: r.createdAt })), claimed),
+          pending: bucketize(recent.filter((r) => !r.isPaid).map((r) => ({ at: r.createdAt })), pending),
+        },
         referrals: list.map((r) => ({
           id: r.id,
           referrer: fullName(r.referrer),
@@ -525,10 +601,11 @@ router.get(
 router.get(
   '/support',
   asyncHandler(async (_req: Request, res: Response) => {
-    const [total, open, resolved, list] = await Promise.all([
+    const [total, open, resolved, recent, list] = await Promise.all([
       prisma.supportChat.count(),
       prisma.supportChat.count({ where: { status: { in: ['OPEN', 'IN_PROGRESS'] } } }),
       prisma.supportChat.count({ where: { status: { in: ['RESOLVED', 'CLOSED'] } } }),
+      prisma.supportChat.findMany({ where: { createdAt: { gte: SIXTY_DAYS_AGO() } }, select: { createdAt: true, status: true } }),
       prisma.supportChat.findMany({
         orderBy: { updatedAt: 'desc' },
         take: 50,
@@ -539,10 +616,15 @@ router.get(
       }),
     ]);
 
+    const rows = (f: (s: string) => boolean) => recent.filter((t) => f(t.status)).map((t) => ({ at: t.createdAt }));
     res.json({
       success: true,
       data: {
-        stats: { total, open, resolved },
+        stats: {
+          total: bucketize(rows(() => true), total),
+          open: bucketize(rows((s) => s === 'OPEN' || s === 'IN_PROGRESS'), open),
+          resolved: bucketize(rows((s) => s === 'RESOLVED' || s === 'CLOSED'), resolved),
+        },
         tickets: list.map((t) => ({
           id: t.id,
           ref: `#TX-${t.id.slice(0, 5).toUpperCase()}`,
@@ -703,59 +785,85 @@ router.get(
 router.get(
   '/insights',
   asyncHandler(async (_req: Request, res: Response) => {
-    const weekAgo = dayStart(-6);
-    const [recent, totalRiders, totalCustomers, totalDeliveries, delivered, terminal] = await Promise.all([
+    const sixMonthsAgo = dayStart(-183);
+    const [recent, totalRiders, totalCustomers, totalDeliveries] = await Promise.all([
       prisma.delivery.findMany({
-        where: { createdAt: { gte: weekAgo }, status: { notIn: ['DRAFT', 'PENDING_PAYMENT'] } },
-        select: { createdAt: true, totalFee: true, deliveredAt: true },
+        where: { createdAt: { gte: sixMonthsAgo }, status: { notIn: ['DRAFT', 'PENDING_PAYMENT'] } },
+        select: { createdAt: true, totalFee: true, deliveredAt: true, status: true },
       }),
       prisma.riderProfile.count(),
       prisma.user.count({ where: { role: 'CUSTOMER' } }),
       prisma.delivery.count({ where: { status: { notIn: ['DRAFT', 'PENDING_PAYMENT'] } } }),
-      prisma.delivery.count({ where: { status: 'DELIVERED' } }),
-      prisma.delivery.count({ where: { status: { in: ['DELIVERED', 'CANCELLED', 'FAILED'] } } }),
     ]);
 
-    // Orders + revenue per day for the last 7 days.
-    const days: { label: string; orders: number; revenue: number }[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const start = dayStart(-i);
-      const end = dayStart(-i + 1);
-      const inDay = recent.filter((d) => d.createdAt >= start && d.createdAt < end);
-      days.push({
-        label: start.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-        orders: inDay.length,
-        revenue: inDay.reduce((s, d) => s + (d.totalFee || 0), 0),
+    // Orders + revenue series at three granularities, so the chart's
+    // period dropdown switches without another request.
+    const bucketSeries = (starts: Date[], label: (d: Date) => string) =>
+      starts.map((start, i) => {
+        const end = i + 1 < starts.length ? starts[i + 1] : new Date(8640000000000000);
+        const inBucket = recent.filter((d) => d.createdAt >= start && d.createdAt < end);
+        return {
+          label: label(start),
+          orders: inBucket.length,
+          revenue: Math.round(inBucket.reduce((s, d) => s + (d.totalFee || 0), 0)),
+        };
       });
-    }
 
-    // Peak delivered hours histogram.
-    const hourCounts = new Map<number, number>();
-    for (const d of recent) {
-      if (!d.deliveredAt) continue;
-      const h = d.deliveredAt.getHours();
-      hourCounts.set(h, (hourCounts.get(h) || 0) + 1);
-    }
+    const dayLbl = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+    const daily = bucketSeries(Array.from({ length: 7 }, (_, i) => dayStart(-(6 - i))), dayLbl);
+    const weekly = bucketSeries(Array.from({ length: 8 }, (_, i) => dayStart(-7 * (7 - i) - 6)), (d) => dayLbl(d));
+    const monthly = bucketSeries(
+      Array.from({ length: 6 }, (_, i) => {
+        const d = new Date();
+        d.setHours(0, 0, 0, 0);
+        d.setDate(1);
+        d.setMonth(d.getMonth() - (5 - i));
+        return d;
+      }),
+      (d) => d.toLocaleDateString('en-GB', { month: 'short' })
+    );
+
+    // Completion rate + peak delivered hours, per window.
     const fmtH = (h: number) => {
       const ampm = h >= 12 ? 'PM' : 'AM';
       const hr = h % 12 === 0 ? 12 : h % 12;
       return `${hr}:00${ampm}`;
     };
-    const peaks = [...hourCounts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([h], i) => ({
-        label: i === 0 ? 'Highest Activity' : 'Moderate Activity',
-        value: `${fmtH(h)} - ${fmtH((h + 2) % 24)}`,
-      }));
+    const windowStats = (from: Date | null) => {
+      const rows = from ? recent.filter((d) => d.createdAt >= from) : recent;
+      const done = rows.filter((d) => d.status === 'DELIVERED').length;
+      const terminal = rows.filter((d) => ['DELIVERED', 'CANCELLED', 'FAILED'].includes(d.status)).length;
+      const hourCounts = new Map<number, number>();
+      for (const d of rows) {
+        if (!d.deliveredAt) continue;
+        const h = d.deliveredAt.getHours();
+        hourCounts.set(h, (hourCounts.get(h) || 0) + 1);
+      }
+      const peaks = [...hourCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([h], i) => ({
+          label: i === 0 ? 'Highest Activity' : 'Moderate Activity',
+          value: `${fmtH(h)} - ${fmtH((h + 2) % 24)}`,
+        }));
+      return { completionRate: terminal ? Math.round((done / terminal) * 100) : 100, peakHours: peaks };
+    };
 
+    const overall = windowStats(null);
     res.json({
       success: true,
       data: {
-        days,
+        series: { daily, weekly, monthly },
         totals: { riders: totalRiders, customers: totalCustomers, deliveries: totalDeliveries },
-        completionRate: terminal ? Math.round((delivered / terminal) * 100) : 100,
-        peakHours: peaks,
+        windows: {
+          overall,
+          week: windowStats(dayStart(-6)),
+          month: windowStats(dayStart(-29)),
+        },
+        // Legacy fields (kept so an older dashboard build keeps working)
+        days: daily,
+        completionRate: overall.completionRate,
+        peakHours: overall.peakHours,
       },
     });
   })
