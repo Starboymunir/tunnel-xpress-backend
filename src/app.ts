@@ -34,9 +34,13 @@ app.use(cors({
 
 // ─── RATE LIMITING ──────────────────────────────────────
 
+// Behind Render's load balancer: without this, req.ip is the proxy address and
+// every client shares ONE rate-limit bucket (one tester can lock out everyone).
+app.set('trust proxy', 1);
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  max: 600, // per client IP — the app polls tracking/notifications frequently
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests, please try again later.' },
@@ -44,7 +48,10 @@ const limiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 30, // per client IP
+  skipSuccessfulRequests: true, // only failed attempts count toward the limit
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { success: false, message: 'Too many auth attempts, please try again later.' },
 });
 
