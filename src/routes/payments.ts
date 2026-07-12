@@ -246,10 +246,14 @@ router.post(
         },
       });
 
-      await prisma.delivery.update({
+      // Same lifecycle as fake mode: paid orders go straight to the rider pool.
+      const finding = await prisma.delivery.update({
         where: { id: payment.deliveryId },
-        data: { status: 'PAID', paidAt: new Date() },
+        data: { status: 'FINDING_RIDER', paidAt: new Date() },
+        select: { id: true, orderTag: true, pickupAddress: true, dropoffAddress: true, totalFee: true, distanceKm: true, packageName: true, riderType: true },
       });
+      emitToRiders('rider:newDelivery', finding);
+      notifyRidersOfNewDelivery(finding.id).catch(() => {});
 
       // Save card if reusable
       if (verification.authorization?.reusable && verification.authorization?.authorization_code) {
@@ -284,15 +288,25 @@ router.post(
       });
     }
 
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: 'FAILED' },
-    });
+    // Only terminal Paystack statuses are failures. While the user is still on
+    // the checkout ('ongoing'/'pending'/'abandoned'), report PENDING so the
+    // app keeps polling instead of showing "declined" mid-payment.
+    if (verification.status === 'failed' || verification.status === 'reversed') {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: 'FAILED' },
+      });
+      return res.json({
+        success: false,
+        message: 'Payment failed',
+        data: { status: 'FAILED', deliveryId: payment.deliveryId },
+      });
+    }
 
     res.json({
-      success: false,
-      message: 'Payment verification failed',
-      data: { status: 'FAILED', deliveryId: payment.deliveryId },
+      success: true,
+      message: 'Payment not completed yet',
+      data: { status: 'PENDING', deliveryId: payment.deliveryId },
     });
   })
 );
@@ -416,6 +430,9 @@ async function initializePaystackTransaction(
       reference,
       metadata,
       currency: 'NGN',
+      // After paying, Paystack sends the user here — a small app page that
+      // closes the checkout tab; the original tab's polling completes the flow.
+      callback_url: process.env.PAYSTACK_CALLBACK_URL || 'https://tunnel-express.vercel.app/checkout-complete',
     }),
   });
 
