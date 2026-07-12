@@ -18,6 +18,9 @@ import supportRoutes from './routes/support';
 import promoRoutes from './routes/promos';
 import uploadRoutes from './routes/uploads';
 import adminRoutes from './routes/admin';
+import riderRoutes from './routes/riders';
+import ratingRoutes from './routes/ratings';
+import bankRoutes from './routes/banks';
 
 const app = express();
 
@@ -84,6 +87,9 @@ app.use('/api/support', supportRoutes);
 app.use('/api/promos', promoRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/riders', riderRoutes);
+app.use('/api/ratings', ratingRoutes);
+app.use('/api/banks', bankRoutes);
 
 // ─── ERROR HANDLING ─────────────────────────────────────
 

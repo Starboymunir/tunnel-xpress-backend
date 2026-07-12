@@ -323,6 +323,64 @@ async function main() {
   });
   console.log('  ✓ Active delivery (IN_TRANSIT) created for customer');
 
+  // ─── COMPLETED DELIVERIES + EARNINGS for rider@test.com ─────
+  // Gives the seeded rider a realistic transaction history: delivered orders
+  // over the past days, each with its 80%-commission RiderEarning ledger row.
+  const COMPLETED = [
+    { tag: 'ORD901', name: 'Documents Envelope', fee: 1500, daysAgo: 1, pickup: 'Obalende, Lagos', dropoff: 'Ikeja, Lagos' },
+    { tag: 'ORD902', name: 'Fashion Parcel', fee: 2300, daysAgo: 2, pickup: 'Lekki Phase 1, Lagos', dropoff: 'Surulere, Lagos' },
+    { tag: 'ORD903', name: 'Phone Accessories', fee: 1800, daysAgo: 3, pickup: 'Yaba, Lagos', dropoff: 'Victoria Island, Lagos' },
+    { tag: 'ORD904', name: 'Food Package', fee: 1200, daysAgo: 4, pickup: 'Ikeja, Lagos', dropoff: 'Maryland, Lagos' },
+    { tag: 'ORD905', name: 'Groceries Box', fee: 2750, daysAgo: 6, pickup: 'Ajah, Lagos', dropoff: 'Lekki Phase 1, Lagos' },
+  ];
+  for (const c of COMPLETED) {
+    const when = new Date(Date.now() - c.daysAgo * 24 * 3600 * 1000);
+    const common = {
+      customerId: customer.id,
+      riderId: riderProfile!.id,
+      status: 'DELIVERED' as const,
+      pickupAddress: c.pickup,
+      pickupLat: 6.45,
+      pickupLng: 3.39,
+      dropoffAddress: c.dropoff,
+      dropoffLat: 6.58,
+      dropoffLng: 3.35,
+      packageName: c.name,
+      riderType: 'BIKE' as const,
+      distanceKm: 8 + c.daysAgo,
+      baseFee: 500,
+      perKmFee: 100,
+      totalFee: c.fee,
+      paidAt: when,
+      assignedAt: when,
+      pickedUpAt: when,
+      deliveredAt: when,
+      createdAt: when,
+    };
+    const d = await prisma.delivery.upsert({
+      where: { orderTag: c.tag },
+      update: common,
+      create: { orderTag: c.tag, ...common },
+    });
+    await prisma.riderEarning.upsert({
+      where: { deliveryId: d.id },
+      update: { amount: Math.round(c.fee * 0.8), distanceKm: common.distanceKm, createdAt: when },
+      create: {
+        riderProfileId: riderProfile!.id,
+        deliveryId: d.id,
+        amount: Math.round(c.fee * 0.8),
+        distanceKm: common.distanceKm,
+        status: 'PENDING',
+        createdAt: when,
+      },
+    });
+  }
+  await prisma.riderProfile.update({
+    where: { id: riderProfile!.id },
+    data: { totalDeliveries: COMPLETED.length },
+  });
+  console.log('  ✓ 5 completed deliveries + earnings for rider@test.com');
+
   console.log('\n✅ Seed completed successfully!');
   console.log('\n  Test accounts:');
   console.log('  ─────────────────────────────────');
