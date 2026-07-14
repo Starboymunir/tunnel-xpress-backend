@@ -1,6 +1,6 @@
 services:
   - type: web
-    plan: free
+    plan: starter
     name: tunnel-express-api
     runtime: node
     buildCommand: npm install --include=dev && npm run build
@@ -8,14 +8,40 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      # DATABASE_URL = Neon connection string. Set the value in the Render
-      # dashboard (Environment) — not committed since it contains a password.
-      - key: DATABASE_URL
+
+      # ── Secrets: set the values in the Render dashboard when prompted.
+      #    Copy each one from backend/.env (never commit them).
+      - key: DATABASE_URL # Neon Postgres connection string
         sync: false
-      - key: JWT_SECRET
-        generateValue: true
+      - key: JWT_SECRET # keep the SAME values as the old service so nobody is logged out
+        sync: false
       - key: JWT_REFRESH_SECRET
-        generateValue: true
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_PUBLIC_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      # Termii — add values once the sender ID is approved
+      - key: TERMII_API_KEY
+        sync: false
+      - key: TERMII_SENDER_ID
+        sync: false
+
+      # ── Plain config (no secrets)
       - key: JWT_EXPIRES_IN
         value: "15m"
       - key: JWT_REFRESH_EXPIRES_IN
@@ -24,12 +50,21 @@ services:
         value: "10"
       - key: FRONTEND_URL
         value: "*"
-      # Cloudinary — set actual values in the Render dashboard (not committed)
-      - key: CLOUDINARY_CLOUD_NAME
-        sync: false
-      - key: CLOUDINARY_API_KEY
-        sync: false
-      - key: CLOUDINARY_API_SECRET
-        sync: false
       - key: CLOUDINARY_FOLDER
         value: "tunnel-express"
+      - key: BASE_FEE_NGN
+        value: "500"
+      - key: PER_KM_FEE_NGN
+        value: "100"
+      - key: SURGE_MULTIPLIER
+        value: "1.0"
+      - key: SMTP_HOST
+        value: "smtp.gmail.com"
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURE
+        value: "false"
+      # Where Paystack sends the customer after checkout (update when the
+      # web app moves to the company domain).
+      - key: PAYSTACK_CALLBACK_URL
+        value: "https://tunnel-express.vercel.app/checkout-complete"
