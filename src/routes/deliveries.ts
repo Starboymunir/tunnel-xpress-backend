@@ -309,6 +309,11 @@ router.get(
         estimatedMinutes: true,
         orderTag: true,
         packageName: true,
+        pickupContactPhone: true,
+        dropoffContactPhone: true,
+        assignedAt: true,
+        pickedUpAt: true,
+        createdAt: true,
         customer: { select: { id: true, firstName: true, lastName: true, phone: true, avatarUrl: true } },
         rider: {
           select: {
