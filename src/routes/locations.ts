@@ -30,7 +30,7 @@ router.post(
   '/',
   validate(savedLocationSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { label, address, lat, lng, isDefault } = req.body;
+    const { label, address, landmark, lat, lng, isDefault } = req.body;
 
     // If setting as default, unset existing defaults
     if (isDefault) {
@@ -45,6 +45,7 @@ router.post(
         userId: req.user!.userId,
         label,
         address,
+        landmark,
         lat,
         lng,
         isDefault: isDefault ?? false,

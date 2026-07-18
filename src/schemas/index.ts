@@ -120,6 +120,7 @@ export const verifyPaymentSchema = z.object({
 export const savedLocationSchema = z.object({
   label: z.string().min(1, 'Label is required'),
   address: z.string().min(1, 'Address is required'),
+  landmark: z.string().optional(),
   lat: z.number(),
   lng: z.number(),
   isDefault: z.boolean().optional(),

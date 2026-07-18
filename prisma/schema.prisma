@@ -509,6 +509,7 @@ model SavedLocation {
   userId    String
   label     String
   address   String
+  landmark  String?
   lat       Float
   lng       Float
   isDefault Boolean @default(false)
