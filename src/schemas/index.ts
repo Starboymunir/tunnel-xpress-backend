@@ -9,6 +9,7 @@ export const registerEmailSchema = z.object({
   lastName: z.string().optional(),
   phone: z.string().optional(),
   referralCode: z.string().optional(),
+  role: z.enum(['CUSTOMER', 'RIDER']).optional(),
 });
 
 export const registerPhoneSchema = z.object({
@@ -16,6 +17,7 @@ export const registerPhoneSchema = z.object({
   firstName: z.string().optional(),
   lastName: z.string().optional(),
   referralCode: z.string().optional(),
+  role: z.enum(['CUSTOMER', 'RIDER']).optional(),
 });
 
 export const registerGoogleSchema = z.object({

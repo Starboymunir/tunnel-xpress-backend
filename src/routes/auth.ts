@@ -95,7 +95,7 @@ router.post(
   '/register/email',
   validate(registerEmailSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { email: rawEmail, password, firstName, lastName, referralCode } = req.body;
+    const { email: rawEmail, password, firstName, lastName, referralCode, role } = req.body;
     const email = rawEmail.trim().toLowerCase();
 
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -118,6 +118,7 @@ router.post(
         firstName,
         lastName,
         authProvider: 'EMAIL',
+        ...(role === 'RIDER' && { role: 'RIDER' as const, riderProfile: { create: { isApproved: true, availability: 'OFFLINE' as const } } }),
         referralCode: refCode,
         referredBy: referrerId,
         settings: { create: {} },
@@ -164,7 +165,7 @@ router.post(
   '/register/phone',
   validate(registerPhoneSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { phone, firstName, lastName, referralCode } = req.body;
+    const { phone, firstName, lastName, referralCode, role } = req.body;
 
     const existing = await prisma.user.findUnique({ where: { phone } });
     if (existing) throw new AppError('Phone number already registered', 409);
@@ -183,6 +184,7 @@ router.post(
         firstName,
         lastName,
         authProvider: 'PHONE',
+        ...(role === 'RIDER' && { role: 'RIDER' as const, riderProfile: { create: { isApproved: true, availability: 'OFFLINE' as const } } }),
         referralCode: refCode,
         referredBy: referrerId,
         settings: { create: {} },
