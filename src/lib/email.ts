@@ -60,3 +60,18 @@ export async function sendOtpEmail(to: string, code: string) {
   `;
   return sendEmail({ to, subject, text, html });
 }
+
+/** Connects to the SMTP server without sending anything — for the email health check. */
+export async function verifyEmailTransport(): Promise<{ configured: boolean; ok: boolean; error?: string }> {
+  const t = getTransporter();
+  if (!t) return { configured: false, ok: false, error: 'smtp_not_configured' };
+  try {
+    await Promise.race([
+      t.verify(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('SMTP connection timed out after 15s')), 15000)),
+    ]);
+    return { configured: true, ok: true };
+  } catch (err: any) {
+    return { configured: true, ok: false, error: err?.message || String(err) };
+  }
+}

@@ -21,6 +21,7 @@ import adminRoutes from './routes/admin';
 import riderRoutes from './routes/riders';
 import ratingRoutes from './routes/ratings';
 import bankRoutes from './routes/banks';
+import { verifyEmailTransport } from './lib/email';
 
 const app = express();
 
@@ -71,6 +72,11 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // ─── HEALTH CHECK ───────────────────────────────────────
+
+app.get('/api/health/email', async (_req, res) => {
+  const r = await verifyEmailTransport();
+  res.status(r.ok ? 200 : 503).json({ success: r.ok, ...r });
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({
