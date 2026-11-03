@@ -23,9 +23,9 @@ export async function sendEmail(opts: {
   text: string;
   html?: string;
 }): Promise<{ sent: boolean; reason?: string }> {
-  // Brevo sends over HTTPS, so it works on hosts that block outbound SMTP
-  // ports (e.g. Render's free plan). Preferred whenever its key is set.
-  if (process.env.BREVO_API_KEY) return sendViaBrevo(opts);
+  // ZeptoMail sends over HTTPS, so it works on hosts that block outbound SMTP
+  // ports (e.g. Render's free plan). Preferred whenever its token is set.
+  if (process.env.ZEPTOMAIL_TOKEN) return sendViaZeptoMail(opts);
 
   const t = getTransporter();
   if (!t) {
@@ -52,28 +52,38 @@ function parseFrom(from: string): { name: string; email: string } {
   return m ? { name: m[1].trim() || 'Tunnel Express', email: m[2].trim() } : { name: 'Tunnel Express', email: from.trim() };
 }
 
-async function sendViaBrevo(opts: { to: string; subject: string; text: string; html?: string }): Promise<{ sent: boolean; reason?: string }> {
+// Accepts the token with or without the "Zoho-enczapikey " prefix ZeptoMail shows it with.
+function zeptoAuth(): string {
+  const t = (process.env.ZEPTOMAIL_TOKEN as string).trim();
+  return t.startsWith('Zoho-enczapikey') ? t : `Zoho-enczapikey ${t}`;
+}
+
+// US datacenter by default; set ZEPTOMAIL_HOST for others (api.zeptomail.eu, api.zeptomail.in).
+const zeptoUrl = () => `https://${process.env.ZEPTOMAIL_HOST || 'api.zeptomail.com'}/v1.1/email`;
+
+async function sendViaZeptoMail(opts: { to: string; subject: string; text: string; html?: string }): Promise<{ sent: boolean; reason?: string }> {
   try {
-    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    const from = parseFrom(process.env.ZEPTOMAIL_FROM || config.smtp.from);
+    const res = await fetch(zeptoUrl(), {
       method: 'POST',
-      headers: { 'api-key': process.env.BREVO_API_KEY as string, 'Content-Type': 'application/json', accept: 'application/json' },
+      headers: { Authorization: zeptoAuth(), 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
-        sender: parseFrom(process.env.BREVO_FROM || config.smtp.from),
-        to: [{ email: opts.to }],
+        from: { address: from.email, name: from.name },
+        to: [{ email_address: { address: opts.to } }],
         subject: opts.subject,
-        textContent: opts.text,
-        ...(opts.html ? { htmlContent: opts.html } : {}),
+        textbody: opts.text,
+        ...(opts.html ? { htmlbody: opts.html } : {}),
       }),
     });
     if (!res.ok) {
       const body = await res.text();
-      console.error('[email/brevo] send failed:', res.status, body);
-      return { sent: false, reason: `brevo_${res.status}` };
+      console.error('[email/zeptomail] send failed:', res.status, body);
+      return { sent: false, reason: `zeptomail_${res.status}` };
     }
     return { sent: true };
   } catch (err: any) {
-    console.error('[email/brevo] send failed:', err?.message || err);
-    return { sent: false, reason: err?.message || 'brevo_failed' };
+    console.error('[email/zeptomail] send failed:', err?.message || err);
+    return { sent: false, reason: err?.message || 'zeptomail_failed' };
   }
 }
 
@@ -97,12 +107,20 @@ export async function sendOtpEmail(to: string, code: string) {
 
 /** Connects to the SMTP server without sending anything — for the email health check. */
 export async function verifyEmailTransport(): Promise<{ configured: boolean; ok: boolean; provider?: string; error?: string }> {
-  if (process.env.BREVO_API_KEY) {
+  if (process.env.ZEPTOMAIL_TOKEN) {
+    // ZeptoMail has no read-only endpoint for send tokens, so post an empty
+    // message: a bad token gets 401/403, a good one only a validation error.
     try {
-      const res = await fetch('https://api.brevo.com/v3/account', { headers: { 'api-key': process.env.BREVO_API_KEY, accept: 'application/json' } });
-      return res.ok ? { configured: true, ok: true, provider: 'brevo' } : { configured: true, ok: false, provider: 'brevo', error: `brevo_${res.status}` };
+      const res = await fetch(zeptoUrl(), {
+        method: 'POST',
+        headers: { Authorization: zeptoAuth(), 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: '{}',
+      });
+      return res.status === 401 || res.status === 403
+        ? { configured: true, ok: false, provider: 'zeptomail', error: `zeptomail_${res.status}: ${await res.text()}` }
+        : { configured: true, ok: true, provider: 'zeptomail' };
     } catch (err: any) {
-      return { configured: true, ok: false, provider: 'brevo', error: err?.message || String(err) };
+      return { configured: true, ok: false, provider: 'zeptomail', error: err?.message || String(err) };
     }
   }
   const t = getTransporter();
